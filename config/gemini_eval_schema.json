@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": { "type": "string" },
+    "model_ranking": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "turn_scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "turn_index": { "type": "integer" },
+          "speaker": { "type": "string" },
+          "intent_fit": { "type": "number" },
+          "naturalness": { "type": "number" },
+          "consistency": { "type": "number" },
+          "informativeness": { "type": "number" },
+          "conciseness": { "type": "number" },
+          "safety": { "type": "number" },
+          "completeness": { "type": "number" },
+          "language_purity": { "type": "number" },
+          "overall": { "type": "number" },
+          "verdict": { "type": "string" },
+          "reason_short": { "type": "string" }
+        },
+        "required": [
+          "turn_index",
+          "speaker",
+          "intent_fit",
+          "naturalness",
+          "consistency",
+          "informativeness",
+          "conciseness",
+          "safety",
+          "completeness",
+          "language_purity",
+          "overall",
+          "verdict",
+          "reason_short"
+        ]
+      }
+    },
+    "preferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "turn_index": { "type": "integer" },
+          "chosen_speaker": { "type": "string" },
+          "chosen_text": { "type": "string" },
+          "rejected_speaker": { "type": "string" },
+          "rejected_text": { "type": "string" },
+          "reason_short": { "type": "string" }
+        },
+        "required": [
+          "turn_index",
+          "chosen_speaker",
+          "chosen_text",
+          "rejected_speaker",
+          "rejected_text",
+          "reason_short"
+        ]
+      }
+    }
+  },
+  "required": [
+    "session_id",
+    "model_ranking",
+    "turn_scores",
+    "preferences"
+  ]
+}

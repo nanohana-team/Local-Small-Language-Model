@@ -1,0 +1,14 @@
+{
+  "max_rounds": 4,
+  "participants": [
+    "teacher_a",
+    "teacher_b",
+    "teacher_c",
+    "learning_gemma"
+  ],
+  "history_strategy": "full_turns",
+  "turn_sleep_sec": 0.0,
+  "stop_on_empty_response": true,
+  "include_input_as_first_user_turn": true,
+  "max_context_messages": 32
+}
