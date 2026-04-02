@@ -1,0 +1,12 @@
+{
+  "session_id": "a22aacfb-07c6-4e9d-8f00-f2bd1bae50cc",
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "updated_at": "2026-04-03 06:28:30.233",
+  "history": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "port": 3000,
+      "text": "もちろんです。「四季の変化」について話しましょう。春の桜、夏の盆栽、秋の紅葉、冬の雪景色、それぞれの季節が異なる美しさを提供します。"
+    }
+  ]
+}

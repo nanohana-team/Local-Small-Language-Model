@@ -1,0 +1,74 @@
+{
+  "model_ranking": [
+    "microsoft/Phi-3.5-mini-instruct",
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    "LiquidAI/LFM2.5-1.2B-Instruct",
+    "google/gemma-3-270m-it"
+  ],
+  "model_scores": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "overall": 0.65,
+      "naturalness": 0.7,
+      "consistency": 0.7,
+      "informativeness": 0.6,
+      "conciseness": 0.6,
+      "safety": 1.0
+    },
+    {
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "overall": 0.55,
+      "naturalness": 0.6,
+      "consistency": 0.5,
+      "informativeness": 0.5,
+      "conciseness": 0.5,
+      "safety": 1.0
+    },
+    {
+      "model": "LiquidAI/LFM2.5-1.2B-Instruct",
+      "overall": 0.5,
+      "naturalness": 0.5,
+      "consistency": 0.5,
+      "informativeness": 0.5,
+      "conciseness": 0.5,
+      "safety": 1.0
+    },
+    {
+      "model": "google/gemma-3-270m-it",
+      "overall": 0.1,
+      "naturalness": 0.1,
+      "consistency": 0.1,
+      "informativeness": 0.1,
+      "conciseness": 0.1,
+      "safety": 1.0
+    }
+  ],
+  "turn_scores": [
+    {
+      "turn_index": 7,
+      "overall": 0.1,
+      "naturalness": 0.1,
+      "consistency": 0.1,
+      "informativeness": 0.1,
+      "conciseness": 0.1,
+      "safety": 1.0,
+      "verdict": "bad",
+      "reason_short": "Repetitive text generation and failure to maintain conversation context."
+    },
+    {
+      "turn_index": 12,
+      "overall": 0.1,
+      "naturalness": 0.1,
+      "consistency": 0.1,
+      "informativeness": 0.1,
+      "conciseness": 0.1,
+      "safety": 1.0,
+      "verdict": "bad",
+      "reason_short": "Output consists of repetitive model names and broken sentence fragments."
+    }
+  ],
+  "session_id": "c2ea034f-3dd4-465e-8dfc-962149102c03",
+  "evaluated_by": "gemini",
+  "evaluated_at": "2026-04-03 07:12:42",
+  "session_turns": 20
+}

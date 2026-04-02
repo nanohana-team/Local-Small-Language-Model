@@ -28,8 +28,7 @@ def _can_connect(host: str, port: int) -> bool:
 def launch_in_new_console(cmd: List[str], cwd: Path, log_file: Path) -> subprocess.Popen:
     if os.name == "nt":
         quoted = subprocess.list2cmdline(cmd)
-        full_cmd = f'{quoted} 1>> "{log_file}" 2>&1'
-        return subprocess.Popen(["cmd.exe", "/k", full_cmd], cwd=str(cwd), creationflags=subprocess.CREATE_NEW_CONSOLE)
+        return subprocess.Popen(f'cmd.exe /k {quoted}', cwd=str(cwd), creationflags=subprocess.CREATE_NEW_CONSOLE)
     with log_file.open("a", encoding="utf-8") as fh:
         return subprocess.Popen(cmd, cwd=str(cwd), stdout=fh, stderr=subprocess.STDOUT)
 

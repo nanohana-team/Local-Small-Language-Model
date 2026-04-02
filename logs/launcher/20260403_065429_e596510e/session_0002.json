@@ -1,0 +1,13 @@
+{
+  "session_num": 2,
+  "created_at": "2026-04-03 06:57:59",
+  "entry_port": 3000,
+  "ttl": 20,
+  "message": {
+    "session_id": "5ed26fc7-5334-4c39-8839-20645d35d746",
+    "input": "こんにちは。今日の話題を決めてください。",
+    "ttl": 20,
+    "max_ttl": 20,
+    "history": []
+  }
+}

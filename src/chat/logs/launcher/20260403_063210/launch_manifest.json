@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-04-03 06:32:10",
+  "python": "C:\\Users\\nanoha_778\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+  "device": "cuda",
+  "max_new_tokens": 128,
+  "llm_script": "D:\\GitHub\\Local-Small-Language-Model\\src\\chat\\llm.py",
+  "nodes": [
+    {
+      "name": "A",
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "listen_port": 3000,
+      "next_ports": [
+        3001
+      ],
+      "quantization": "8bit",
+      "pid": 45844,
+      "log_file": "D:\\GitHub\\Local-Small-Language-Model\\src\\chat\\logs\\launcher\\20260403_063210\\node_A_port_3000.log"
+    },
+    {
+      "name": "B",
+      "model": "LiquidAI/LFM2.5-1.2B-Instruct",
+      "listen_port": 3001,
+      "next_ports": [
+        3002
+      ],
+      "quantization": "8bit",
+      "pid": 46596,
+      "log_file": "D:\\GitHub\\Local-Small-Language-Model\\src\\chat\\logs\\launcher\\20260403_063210\\node_B_port_3001.log"
+    },
+    {
+      "name": "C",
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "listen_port": 3002,
+      "next_ports": [
+        3000
+      ],
+      "quantization": "8bit",
+      "pid": 44700,
+      "log_file": "D:\\GitHub\\Local-Small-Language-Model\\src\\chat\\logs\\launcher\\20260403_063210\\node_C_port_3002.log"
+    }
+  ]
+}

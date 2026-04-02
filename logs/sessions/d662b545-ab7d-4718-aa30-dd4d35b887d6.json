@@ -1,0 +1,30 @@
+{
+  "session_id": "d662b545-ab7d-4718-aa30-dd4d35b887d6",
+  "model": "google/gemma-3-270m-it",
+  "updated_at": "2026-04-03 07:03:06.247",
+  "status": "running",
+  "turn_count": 4,
+  "input": "こんにちは。今日の話題を決めてください。",
+  "history": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "port": 3000,
+      "text": "今日は桜が咲く季節です。"
+    },
+    {
+      "model": "LiquidAI/LFM2.5-1.2B-Instruct",
+      "port": 3001,
+      "text": "こんにちは！今日は桜が咲く季節です。美しい花の季節ですね。"
+    },
+    {
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "port": 3002,
+      "text": "明日、友人との旅行について話し合いましょう。楽しい時間を過ごしましょう。"
+    },
+    {
+      "model": "google/gemma-3-270m-it",
+      "port": 3003,
+      "text": "こんにちは。今日の話題は…。"
+    }
+  ]
+}

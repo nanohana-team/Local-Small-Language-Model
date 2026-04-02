@@ -14,7 +14,7 @@ DEFAULT_NODES = [
 ]
 
 def build_command(python_exe: str, script_path: Path, model: str, listen_port: int, next_ports: List[int], max_new_tokens: int, device: str, quantization: str) -> List[str]:
-    return [python_exe, str(script_path), "--model", model, "--listen-port", str(listen_port), "--next-ports", *[str(p) for p in next_ports], "--max-new-tokens", str(max_new_tokens), "--device", device, "--quantization", quantization]
+    return [python_exe, "-u", str(script_path), "--model", model, "--listen-port", str(listen_port), "--next-ports", *[str(p) for p in next_ports], "--max-new-tokens", str(max_new_tokens), "--device", device, "--quantization", quantization]
 
 def resolve_llm_script(chat_dir: Path) -> Path:
     for candidate in [chat_dir / "llm" / "llm.py", chat_dir / "llm.py"]:
@@ -30,8 +30,7 @@ def launcher_log_dir(chat_dir: Path) -> Path:
 def launch_in_new_console(cmd: List[str], cwd: Path, log_file: Path) -> subprocess.Popen:
     if os.name == "nt":
         quoted = subprocess.list2cmdline(cmd)
-        full_cmd = f'{quoted} 1>> "{log_file}" 2>&1'
-        return subprocess.Popen(["cmd.exe", "/k", full_cmd], cwd=str(cwd), creationflags=subprocess.CREATE_NEW_CONSOLE)
+        return subprocess.Popen(f'cmd.exe /k {quoted}', cwd=str(cwd), creationflags=subprocess.CREATE_NEW_CONSOLE)
     with log_file.open("a", encoding="utf-8") as fh:
         return subprocess.Popen(cmd, cwd=str(cwd), stdout=fh, stderr=subprocess.STDOUT)
 

@@ -1,0 +1,12 @@
+{
+  "session_id": "514b81ae-7f8d-4de6-8481-820040432989",
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "updated_at": "2026-04-03 06:21:37.906",
+  "history": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "port": 3000,
+      "text": "今日は、「桜の花見」をテーマにしましょう。"
+    }
+  ]
+}

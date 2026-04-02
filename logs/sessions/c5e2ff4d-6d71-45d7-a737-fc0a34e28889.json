@@ -1,0 +1,12 @@
+{
+  "session_id": "c5e2ff4d-6d71-45d7-a737-fc0a34e28889",
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "updated_at": "2026-04-03 06:20:55.057",
+  "history": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "port": 3000,
+      "text": "今日は、季節の変わり目について話しましょう。春の訪れと、その短いが美しい日々の始まりを感じていますか？"
+    }
+  ]
+}

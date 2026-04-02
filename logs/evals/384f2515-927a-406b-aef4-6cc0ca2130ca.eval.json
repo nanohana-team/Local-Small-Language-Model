@@ -1,0 +1,50 @@
+{
+  "ranking": [
+    "microsoft/Phi-3.5-mini-instruct",
+    "LFM2.5-1.2B-Instruct",
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    "google/gemma-3-270m-it"
+  ],
+  "model_scores": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "overall": 0.4,
+      "naturalness": 0.5,
+      "consistency": 0.4,
+      "informativeness": 0.4,
+      "conciseness": 0.3,
+      "safety": 1.0
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct",
+      "overall": 0.35,
+      "naturalness": 0.5,
+      "consistency": 0.3,
+      "informativeness": 0.3,
+      "conciseness": 0.4,
+      "safety": 1.0
+    },
+    {
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "overall": 0.2,
+      "naturalness": 0.2,
+      "consistency": 0.2,
+      "informativeness": 0.2,
+      "conciseness": 0.2,
+      "safety": 1.0
+    },
+    {
+      "model": "google/gemma-3-270m-it",
+      "overall": 0.1,
+      "naturalness": 0.1,
+      "consistency": 0.1,
+      "informativeness": 0.1,
+      "conciseness": 0.1,
+      "safety": 1.0
+    }
+  ],
+  "session_id": "384f2515-927a-406b-aef4-6cc0ca2130ca",
+  "evaluated_by": "gemini",
+  "evaluated_at": "2026-04-03 06:57:56",
+  "session_turns": 20
+}

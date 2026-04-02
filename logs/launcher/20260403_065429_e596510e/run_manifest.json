@@ -1,0 +1,50 @@
+{
+  "run_id": "20260403_065429_e596510e",
+  "created_at": "2026-04-03 06:54:29",
+  "project_root": "D:\\GitHub\\Local-Small-Language-Model",
+  "llm_script": "D:\\GitHub\\Local-Small-Language-Model\\src\\chat\\llm.py",
+  "device": "cuda",
+  "max_new_tokens": 128,
+  "loops_per_session": 5,
+  "session_count": 0,
+  "session_interval": 3.0,
+  "entry_port": 3000,
+  "nodes": [
+    {
+      "name": "A",
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "listen_port": 3000,
+      "next_ports": [
+        3001
+      ],
+      "quantization": "8bit"
+    },
+    {
+      "name": "B",
+      "model": "LiquidAI/LFM2.5-1.2B-Instruct",
+      "listen_port": 3001,
+      "next_ports": [
+        3002
+      ],
+      "quantization": "8bit"
+    },
+    {
+      "name": "C",
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "listen_port": 3002,
+      "next_ports": [
+        3003
+      ],
+      "quantization": "8bit"
+    },
+    {
+      "name": "D",
+      "model": "google/gemma-3-270m-it",
+      "listen_port": 3003,
+      "next_ports": [
+        3000
+      ],
+      "quantization": "4bit"
+    }
+  ]
+}

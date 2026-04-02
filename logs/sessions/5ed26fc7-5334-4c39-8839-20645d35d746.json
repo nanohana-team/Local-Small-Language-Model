@@ -1,0 +1,14 @@
+{
+  "session_id": "5ed26fc7-5334-4c39-8839-20645d35d746",
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "updated_at": "2026-04-03 06:58:09.294",
+  "status": "running",
+  "turn_count": 1,
+  "history": [
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "port": 3000,
+      "text": "もちろんです。今日は「桜の季節」について話しましょう。桜は日本の春の象徴であり、多くの人々に愛されています。各地方には独特の桜の種類や見頃の時期があり、それぞれに独特の美しさがあります。例えば、ソメイヨ"
+    }
+  ]
+}
