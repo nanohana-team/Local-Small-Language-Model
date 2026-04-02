@@ -1,0 +1,3 @@
+{"id":"p000001","input":"こんにちは、今日はなんだか眠いです","meta":{"domain":"daily_chat","task":"conversation","tone":"gentle","difficulty":"easy","target_length":"short"}}
+{"id":"p000002","input":"軽量なローカルモデルを育てたいんだけど、まず何から始めればいい？","meta":{"domain":"ai_dev","task":"advice","tone":"neutral","difficulty":"medium","target_length":"medium"}}
+{"id":"p000003","messages":[{"role":"system","content":"あなたはやさしく自然に話す日本語AIです。"},{"role":"user","content":"失敗してちょっと落ち込んでる"}],"meta":{"domain":"emotional_support","task":"conversation","tone":"warm","difficulty":"easy","target_length":"short"}}
