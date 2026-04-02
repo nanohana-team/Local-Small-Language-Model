@@ -2,33 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-# どこに置いても起動できるように import を多段 fallback にする
-try:
-    from src.inference.local_student_client import LearningConfig, LocalStudentClient
-except Exception:
-    try:
-        from src.tools.local_student_client import LearningConfig, LocalStudentClient
-    except Exception:
-        from local_student_client import LearningConfig, LocalStudentClient
-
-try:
-    from src.inference.teacher_client import TeacherConfig
-except Exception:
-    try:
-        from src.tools.teacher_client import TeacherConfig
-    except Exception:
-        from teacher_client import TeacherConfig
-
-try:
-    from src.loop.run_selfplay_session import ConversationLoopConfig, run_single_session
-except Exception:
-    try:
-        from src.tools.run_selfplay_session import ConversationLoopConfig, run_single_session
-    except Exception:
-        from run_selfplay_session import ConversationLoopConfig, run_single_session
+from src.inference.local_student_client import LearningConfig, LocalStudentClient
+from src.inference.teacher_client import TeacherConfig
+from src.loop.run_selfplay_session import ConversationLoopConfig, run_single_session
 
 
 def load_json(path: Path) -> Any:
@@ -81,20 +61,11 @@ def main() -> int:
     if args.limit > 0:
         prompts = prompts[: args.limit]
 
-    if not isinstance(teachers_raw, list):
-        raise ValueError("teachers config must be a JSON array")
-
     teachers = {str(x["name"]): TeacherConfig.from_dict(x) for x in teachers_raw}
     learning_cfg = LearningConfig.from_dict(learning_raw)
     loop_cfg = ConversationLoopConfig.from_dict(loop_raw)
 
-    if not loop_cfg.participants:
-        raise ValueError("loop config participants is empty")
-
-    missing = [
-        name for name in loop_cfg.participants
-        if name != learning_cfg.name and name not in teachers
-    ]
+    missing = [name for name in loop_cfg.participants if name != learning_cfg.name and name not in teachers]
     if missing:
         raise ValueError(f"Participants not found in teachers config: {missing}")
 

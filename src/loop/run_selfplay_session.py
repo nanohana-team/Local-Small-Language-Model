@@ -1,33 +1,15 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List
 
-try:
-    from src.inference.local_student_client import LearningConfig, LocalStudentClient
-except Exception:
-    try:
-        from src.tools.local_student_client import LearningConfig, LocalStudentClient
-    except Exception:
-        from local_student_client import LearningConfig, LocalStudentClient
-
-try:
-    from src.inference.teacher_client import TeacherConfig, generate_teacher_reply
-except Exception:
-    try:
-        from src.tools.teacher_client import TeacherConfig, generate_teacher_reply
-    except Exception:
-        from teacher_client import TeacherConfig, generate_teacher_reply
-
-try:
-    from src.loop.session_types import SessionRecord, TurnRecord, utc_now_iso
-except Exception:
-    try:
-        from src.tools.session_types import SessionRecord, TurnRecord, utc_now_iso
-    except Exception:
-        from session_types import SessionRecord, TurnRecord, utc_now_iso
+from src.inference.local_student_client import LearningConfig, LocalStudentClient
+from src.inference.teacher_client import TeacherConfig, generate_teacher_reply
+from src.loop.session_types import SessionRecord, TurnRecord, utc_now_iso
 
 
 @dataclass
@@ -53,7 +35,10 @@ class ConversationLoopConfig:
         )
 
 
-def build_messages_for_next_turn(session: SessionRecord, max_context_messages: int) -> List[Dict[str, str]]:
+def build_messages_for_next_turn(
+    session: SessionRecord,
+    max_context_messages: int,
+) -> List[Dict[str, str]]:
     messages: List[Dict[str, str]] = [{"role": "user", "content": session.input_text}]
     for turn in session.turns:
         messages.append({"role": turn.role, "content": turn.text})
@@ -103,7 +88,6 @@ def run_single_session(
 
         text = (text or "").strip()
         if not text and loop_cfg.stop_on_empty_response:
-            print(f"[WARN] empty response from {speaker_name}; stopping session {session.session_id}")
             break
 
         session.turns.append(

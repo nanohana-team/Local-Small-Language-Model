@@ -38,21 +38,13 @@ class CombineLogs:
             }
         return self.sessions[session_id]
 
-    def build_event_id(self, source_file: Path, line_no: int, event: dict[str, Any]) -> str:
-        # timestamp 秒精度だけでは同一秒内イベントが衝突しやすいので行番号も含める
+    def build_event_id(self, source_file: Path, byte_offset: int, event: dict[str, Any]) -> str:
         session_id = event.get("session_id", "no-session")
         timestamp = event.get("timestamp", "")
         event_name = event.get("event", "")
         port = event.get("port", "")
         return "|".join(
-            [
-                source_file.name,
-                str(line_no),
-                str(session_id),
-                str(timestamp),
-                str(event_name),
-                str(port),
-            ]
+            [source_file.name, str(byte_offset), str(session_id), str(timestamp), str(event_name), str(port)]
         )
 
     def update_session(self, source_file: Path, event: dict[str, Any]) -> None:
@@ -61,7 +53,6 @@ class CombineLogs:
             return
 
         session = self.ensure_session(session_id)
-
         session["updated_at"] = event.get("timestamp")
         session["last_event"] = event.get("event")
 
@@ -99,14 +90,12 @@ class CombineLogs:
 
         with path.open("r", encoding="utf-8") as f:
             f.seek(current_offset)
-
-            line_no = 0
             while True:
+                byte_offset = f.tell()
                 line = f.readline()
                 if not line:
                     break
 
-                line_no += 1
                 raw_line = line.strip()
                 if not raw_line:
                     continue
@@ -116,7 +105,7 @@ class CombineLogs:
                 except json.JSONDecodeError:
                     continue
 
-                event_id = self.build_event_id(path, line_no, event)
+                event_id = self.build_event_id(path, byte_offset, event)
                 if event_id in self.seen_events:
                     continue
 
