@@ -1,0 +1,10 @@
+torch
+transformers
+peft
+accelerate
+datasets
+python-dotenv
+sentencepiece
+safetensors
+openai
+google-genai
