@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import argparse
@@ -15,14 +16,10 @@ from src.llm.evaluator_gemini import GeminiEvaluator
 from src.llm.input_generator_gemini import GeminiInputGenerator
 from src.utils.storage import StorageManager
 from src.utils.trainer import Trainer
+from src.apps.chat_control import ChatController
 
 
 def load_dotenv_file(dotenv_path: str | Path = ".env", override: bool = False) -> None:
-    """
-    Minimal .env loader.
-    Supports simple KEY=VALUE lines.
-    Ignores comments and blank lines.
-    """
     path = Path(dotenv_path)
     if not path.exists():
         return
@@ -34,12 +31,7 @@ def load_dotenv_file(dotenv_path: str | Path = ".env", override: bool = False) -
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
-
-        if not line:
-            continue
-        if line.startswith("#"):
-            continue
-        if "=" not in line:
+        if not line or line.startswith("#") or "=" not in line:
             continue
 
         key, value = line.split("=", 1)
@@ -62,141 +54,29 @@ def parse_args() -> argparse.Namespace:
         description="Local Small Language Model v2 - learning/chat entrypoint"
     )
 
-    parser.add_argument(
-        "--mode",
-        choices=["learn", "learning", "chat"],
-        required=True,
-        help="Run infinite learning loop (learn), finite learning loop (learning), or chat mode.",
-    )
-    parser.add_argument(
-        "--lexicon",
-        type=str,
-        default="libs/dict.lsdx",
-        help="Path to lexicon file.",
-    )
-    parser.add_argument(
-        "--divergence-model",
-        type=str,
-        default="runtime/models/divergence_model.json",
-        help="Path to divergence model state.",
-    )
-    parser.add_argument(
-        "--convergence-model",
-        type=str,
-        default="runtime/models/convergence_model.json",
-        help="Path to convergence model state.",
-    )
-    parser.add_argument(
-        "--depth",
-        type=int,
-        default=4,
-        help="Recursive divergence depth.",
-    )
-    parser.add_argument(
-        "--branch",
-        type=int,
-        default=6,
-        help="Number of children per token in normal divergence.",
-    )
-    parser.add_argument(
-        "--final-branch",
-        type=int,
-        default=12,
-        help="Number of tokens emitted by final divergence.",
-    )
-    parser.add_argument(
-        "--update-interval",
-        type=int,
-        default=20,
-        help="Update model every N episodes.",
-    )
-    parser.add_argument(
-        "--log-dir",
-        type=str,
-        default="runtime/logs",
-        help="Directory for episode JSONL logs.",
-    )
-    parser.add_argument(
-        "--episode-file",
-        type=str,
-        default="episodes.jsonl",
-        help="Episode JSONL filename under log-dir.",
-    )
-    parser.add_argument(
-        "--input-file",
-        type=str,
-        default="runtime/datasets/inputs.jsonl",
-        help="Learning input dataset path. JSONL: {'tokens':[...]} or {'text':'...'}",
-    )
-    parser.add_argument(
-        "--gemini-model",
-        type=str,
-        default="gemini-2.5-flash-lite",
-        help="Gemini model for evaluation.",
-    )
-    parser.add_argument(
-        "--input-generator-model",
-        type=str,
-        default="gemini-2.5-flash-lite",
-        help="Gemini model for automatic input generation.",
-    )
-    parser.add_argument(
-        "--disable-evaluator",
-        action="store_true",
-        help="Disable Gemini evaluator and use rule-based fallback only.",
-    )
-    parser.add_argument(
-        "--auto-input",
-        action="store_true",
-        help="Generate learning inputs automatically using Gemini API.",
-    )
-    parser.add_argument(
-        "--max-episodes",
-        type=int,
-        default=100,
-        help="Maximum learning episodes to run in finite learning mode.",
-    )
-    parser.add_argument(
-        "--learn-chunk-episodes",
-        type=int,
-        default=100,
-        help="Episodes per chunk when running infinite learn mode.",
-    )
-    parser.add_argument(
-        "--learn-sleep-sec",
-        type=float,
-        default=0.0,
-        help="Optional sleep time between infinite learning chunks.",
-    )
-    parser.add_argument(
-        "--text",
-        type=str,
-        default="",
-        help="Text input for chat mode.",
-    )
-    parser.add_argument(
-        "--words",
-        nargs="*",
-        default=None,
-        help="Tokenized input for chat mode.",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Verbose logging.",
-    )
-    parser.add_argument(
-        "--dotenv-path",
-        type=str,
-        default=".env",
-        help="Path to .env file.",
-    )
-    parser.add_argument(
-        "--dotenv-override",
-        action="store_true",
-        help="Override existing environment variables with values from .env.",
-    )
-
+    parser.add_argument("--mode", choices=["learn", "learning", "chat"], required=True)
+    parser.add_argument("--lexicon", type=str, default="libs/dict.lsdx")
+    parser.add_argument("--divergence-model", type=str, default="runtime/models/divergence_model.json")
+    parser.add_argument("--convergence-model", type=str, default="runtime/models/convergence_model.json")
+    parser.add_argument("--depth", type=int, default=4)
+    parser.add_argument("--branch", type=int, default=6)
+    parser.add_argument("--final-branch", type=int, default=12)
+    parser.add_argument("--update-interval", type=int, default=20)
+    parser.add_argument("--log-dir", type=str, default="runtime/logs")
+    parser.add_argument("--episode-file", type=str, default="episodes.jsonl")
+    parser.add_argument("--input-file", type=str, default="runtime/datasets/inputs.jsonl")
+    parser.add_argument("--gemini-model", type=str, default="gemini-2.5-flash-lite")
+    parser.add_argument("--input-generator-model", type=str, default="gemini-2.5-flash-lite")
+    parser.add_argument("--disable-evaluator", action="store_true")
+    parser.add_argument("--auto-input", action="store_true")
+    parser.add_argument("--max-episodes", type=int, default=100)
+    parser.add_argument("--learn-chunk-episodes", type=int, default=100)
+    parser.add_argument("--learn-sleep-sec", type=float, default=0.0)
+    parser.add_argument("--text", type=str, default="")
+    parser.add_argument("--words", nargs="*", default=None)
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--dotenv-path", type=str, default=".env")
+    parser.add_argument("--dotenv-override", action="store_true")
     return parser.parse_args()
 
 
@@ -240,7 +120,6 @@ def read_learning_inputs(path: Path) -> List[List[str]]:
                         episodes.append(row["text"].strip().split())
                 elif isinstance(row, list):
                     episodes.append([str(x) for x in row if str(x).strip()])
-
     else:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -255,6 +134,47 @@ def print_gemini_env_status(auto_input: bool, evaluator_enabled: bool) -> None:
     has_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
     if auto_input or evaluator_enabled:
         print(f"[ENV] GEMINI_API_KEY={'set' if has_key else 'missing'}")
+
+
+def build_chat_controller(args: argparse.Namespace) -> ChatController:
+    lexicon_path = Path(args.lexicon)
+    div_model_path = Path(args.divergence_model)
+    conv_model_path = Path(args.convergence_model)
+
+    ensure_parent(div_model_path)
+    ensure_parent(conv_model_path)
+
+    print(f"[LEXICON] loading from {lexicon_path}")
+    lexicon = DivergencePrimitive.load_lexicon(lexicon_path)
+    print(f"[LEXICON] loaded entries={len(lexicon)}")
+
+    divergence_model = DivergenceModel(
+        lexicon=lexicon,
+        model_path=div_model_path,
+        default_branch=args.branch,
+        final_branch=args.final_branch,
+    )
+
+    convergence_model = ConvergenceModel(
+        divergence_model=divergence_model,
+        model_path=conv_model_path,
+    )
+
+    evaluator = GeminiEvaluator(
+        model_name=args.gemini_model,
+        enabled=not args.disable_evaluator,
+        verbose=args.verbose,
+    )
+
+    controller = ChatController(
+        divergence_model=divergence_model,
+        convergence_model=convergence_model,
+        evaluator=evaluator,
+        storage=None,
+        trainer=None,
+        verbose=args.verbose,
+    )
+    return controller
 
 
 def build_app(args: argparse.Namespace) -> LearningCentral:
@@ -287,6 +207,7 @@ def build_app(args: argparse.Namespace) -> LearningCentral:
     evaluator = GeminiEvaluator(
         model_name=args.gemini_model,
         enabled=not args.disable_evaluator,
+        verbose=args.verbose,
     )
 
     input_generator = GeminiInputGenerator(
@@ -302,6 +223,9 @@ def build_app(args: argparse.Namespace) -> LearningCentral:
     trainer = Trainer(
         divergence_model_path=div_model_path,
         convergence_model_path=conv_model_path,
+        dict_path=None,  # .lsdx は UnknownTokenExpander に渡さない
+        enable_unknown_token_expansion=False,
+        gemini_model_name=args.gemini_model,
     )
 
     app = LearningCentral(
@@ -317,7 +241,7 @@ def build_app(args: argparse.Namespace) -> LearningCentral:
     return app
 
 
-def run_chat_mode(app: LearningCentral, args: argparse.Namespace) -> int:
+def run_chat_mode(controller: ChatController, args: argparse.Namespace) -> int:
     if args.words:
         input_tokens = [str(x) for x in args.words if str(x).strip()]
     elif args.text.strip():
@@ -326,11 +250,18 @@ def run_chat_mode(app: LearningCentral, args: argparse.Namespace) -> int:
         print("[ERROR] chat mode requires --text or --words")
         return 1
 
-    result = app.run_chat_once(
+    result = controller.run_once(
         input_tokens=input_tokens,
         depth=args.depth,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    print("\n[FINAL RESPONSE]")
+    print(result.get("response_text", ""))
+
+    if args.verbose:
+        print("\n[DETAIL]")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
     return 0
 
 
@@ -413,11 +344,12 @@ def main() -> None:
         evaluator_enabled=not args.disable_evaluator,
     )
 
-    app = build_app(args)
-
     if args.mode == "chat":
-        code = run_chat_mode(app, args)
+        controller = build_chat_controller(args)
+        code = run_chat_mode(controller, args)
         sys.exit(code)
+
+    app = build_app(args)
 
     if args.mode == "learning":
         code = run_learning_mode(app, args)

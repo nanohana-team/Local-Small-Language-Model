@@ -1,172 +1,420 @@
 # src/llm/evaluator_gemini.py
 from __future__ import annotations
 
-import json
-import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
-import requests
+from src.llm.llm_router import LLMRouter
 
 
 class GeminiEvaluator:
     def __init__(
         self,
-        model_name: str = "gemini-2.5-flash-lite",
+        model_name: str | None = None,
         enabled: bool = True,
-        timeout_sec: int = 60,
-    ) -> None:
-        self.model_name = model_name
+        verbose: bool = True,
+    ):
         self.enabled = enabled
-        self.timeout_sec = timeout_sec
-        self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        self.model_name = model_name
+        self.verbose = verbose
+        self.router = LLMRouter(verbose=verbose)
 
-    def _rule_based_fallback(self, episode: Dict[str, Any], error_message: str = "") -> Dict[str, Any]:
-        input_tokens = episode.get("input_tokens", [])
-        response_text = str(episode.get("response_text", ""))
-        initial_core = episode.get("initial_core", [])
-        mid_converged = episode.get("mid_converged", [])
-        final_expanded = episode.get("final_expanded", [])
+    def _log(self, message: str) -> None:
+        if self.verbose:
+            print(message, flush=True)
 
-        overlap = len(set(input_tokens) & set(final_expanded))
-        overlap_score = min(overlap * 10, 30)
+    def _clip01(self, value: float) -> float:
+        if value < 0.0:
+            return 0.0
+        if value > 1.0:
+            return 1.0
+        return value
 
-        length = len(response_text)
-        if 4 <= length <= 30:
-            length_score = 20
-        elif 1 <= length <= 40:
-            length_score = 12
-        else:
-            length_score = 6
+    def _to_float(self, value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
 
-        structure_score = 0
-        if len(initial_core) >= 2:
-            structure_score += 10
-        if len(mid_converged) >= 2:
-            structure_score += 10
-        if response_text.endswith(("。", "！", "？", "…")):
-            structure_score += 10
-
-        total = overlap_score + length_score + structure_score
-        total = max(0, min(total, 100))
-
-        return {
-            "score_total": float(total),
-            "scores": {
-                "response_quality": float(length_score + 10),
-                "divergence_quality": float(structure_score),
-                "convergence_quality": float(overlap_score),
-                "efficiency": 50.0,
-            },
-            "comment": "Rule-based fallback evaluation was used.",
-            "model": "rule_based_fallback",
-            "used_api": False,
-            "error": error_message,
-        }
-
-    def _build_prompt(self, episode: Dict[str, Any]) -> str:
-        payload = {
-            "input_tokens": episode.get("input_tokens", []),
-            "initial_core": episode.get("initial_core", []),
-            "divergence_steps": episode.get("divergence_steps", []),
-            "mid_converged": episode.get("mid_converged", []),
-            "final_expanded": episode.get("final_expanded", []),
-            "response_text": episode.get("response_text", ""),
-            "depth": episode.get("depth", 0),
-        }
-
-        prompt = f"""
-You are an evaluator for a local small language model.
-Evaluate the following thought-search episode.
-
-Return STRICT JSON ONLY with the following schema:
-{{
-  "score_total": 0-100 number,
-  "scores": {{
-    "response_quality": 0-100 number,
-    "divergence_quality": 0-100 number,
-    "convergence_quality": 0-100 number,
-    "efficiency": 0-100 number
-  }},
-  "comment": "short English comment"
-}}
-
-Evaluation criteria:
-- response_quality: Is the final response natural and minimally coherent?
-- divergence_quality: Did the divergence seem meaningfully exploratory rather than random?
-- convergence_quality: Did the convergence keep useful tokens and narrow appropriately?
-- efficiency: Was the route reasonably efficient for its depth and output?
-
-Episode:
-{json.dumps(payload, ensure_ascii=False)}
-""".strip()
-        return prompt
-
-    def _call_gemini(self, prompt: str) -> Dict[str, Any]:
-        endpoint = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model_name}:generateContent?key={self.api_key}"
-        )
-        body = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.1,
-                "topP": 0.8,
-                "topK": 20,
-                "maxOutputTokens": 512,
-                "responseMimeType": "application/json",
-            },
-        }
-
-        response = requests.post(
-            endpoint,
-            headers={"Content-Type": "application/json"},
-            json=body,
-            timeout=self.timeout_sec,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        candidates = data.get("candidates", [])
-        if not candidates:
-            raise RuntimeError("Gemini returned no candidates")
-
-        parts = candidates[0].get("content", {}).get("parts", [])
-        text = ""
-        for part in parts:
-            if "text" in part:
-                text += str(part["text"])
-
-        text = text.strip()
-        if not text:
-            raise RuntimeError("Gemini returned empty text")
-
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise RuntimeError("Gemini response is not a JSON object")
-
-        parsed["model"] = self.model_name
-        parsed["used_api"] = True
-        return parsed
+    # =========================================================
+    # learn mode
+    # =========================================================
 
     def evaluate_episode(self, episode: Dict[str, Any]) -> Dict[str, Any]:
         if not self.enabled:
-            return self._rule_based_fallback(episode, error_message="evaluator disabled")
+            return self._fallback_episode_evaluation(episode=episode, reason="disabled")
 
-        if not self.api_key:
-            return self._rule_based_fallback(episode, error_message="GEMINI_API_KEY not set")
+        prompt = {
+            "instruction": (
+                "Return ONLY valid JSON object. No explanation. No markdown. "
+                "Evaluate this episode for reinforcement learning."
+            ),
+            "task": "evaluate_episode",
+            "layer": "core_thought",
+            "input_tokens": [str(x) for x in episode.get("input_tokens", [])],
+            "initial_core": [str(x) for x in episode.get("initial_core", [])],
+            "mid_converged": [str(x) for x in episode.get("mid_converged", [])],
+            "final_expanded": [str(x) for x in episode.get("final_expanded", [])],
+            "response_text": str(episode.get("response_text", "")),
+            "criteria": [
+                "response_quality",
+                "divergence_quality",
+                "convergence_quality",
+                "thought_efficiency",
+                "naturalness",
+            ],
+            "output_format": {
+                "score_response": 0.0,
+                "score_divergence": 0.0,
+                "score_convergence": 0.0,
+                "score_efficiency": 0.0,
+                "score_naturalness": 0.0,
+                "score_total": 0.0,
+                "reason": "",
+            },
+        }
 
-        prompt = self._build_prompt(episode)
         try:
-            result = self._call_gemini(prompt)
-            result.setdefault("score_total", 50.0)
-            result.setdefault("scores", {})
-            result.setdefault("comment", "")
-            return result
+            self._log(f"[EVAL][episode] router_call model={self.model_name or 'auto'}")
+            result = self.router.generate_json(prompt, model_name=self.model_name)
+            return self._normalize_episode_evaluation(result)
         except Exception as exc:
-            return self._rule_based_fallback(episode, error_message=str(exc))
+            self._log(f"[EVAL][episode] fallback reason={type(exc).__name__}:{exc}")
+            return self._fallback_episode_evaluation(
+                episode=episode,
+                reason=f"fallback:{type(exc).__name__}:{exc}",
+            )
+
+    def _normalize_episode_evaluation(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        score_response = self._clip01(self._to_float(result.get("score_response"), 0.5))
+        score_divergence = self._clip01(self._to_float(result.get("score_divergence"), 0.5))
+        score_convergence = self._clip01(self._to_float(result.get("score_convergence"), 0.5))
+        score_efficiency = self._clip01(self._to_float(result.get("score_efficiency"), 0.5))
+        score_naturalness = self._clip01(self._to_float(result.get("score_naturalness"), 0.5))
+
+        raw_total = result.get("score_total")
+        if raw_total is None:
+            score_total = (
+                score_response * 0.30
+                + score_divergence * 0.20
+                + score_convergence * 0.20
+                + score_efficiency * 0.15
+                + score_naturalness * 0.15
+            )
+        else:
+            score_total = self._clip01(self._to_float(raw_total, 0.5))
+
+        return {
+            "score_response": round(score_response, 6),
+            "score_divergence": round(score_divergence, 6),
+            "score_convergence": round(score_convergence, 6),
+            "score_efficiency": round(score_efficiency, 6),
+            "score_naturalness": round(score_naturalness, 6),
+            "score_total": round(score_total, 6),
+            "reason": str(result.get("reason", "")),
+        }
+    
+    def evaluate_recursive_state(
+        self,
+        original_input_tokens: List[str],
+        current_input_tokens: List[str],
+        raw_output_tokens: List[str],
+        normalized_candidate_tokens: List[str],
+        step_index: int,
+    ) -> Dict[str, Any]:
+        if not self.enabled:
+            return {
+                "accepted": False,
+                "score_total": 0.0,
+                "reason": "disabled",
+                "step": step_index,
+            }
+
+        prompt = {
+            "instruction": (
+                "Return ONLY valid JSON object. No explanation. No markdown. "
+                "Evaluate whether this recursive thought step is good enough to stop."
+            ),
+            "task": "evaluate_recursive_state",
+            "layer": "core_thought_recursive",
+            "original_input_tokens": [str(x) for x in original_input_tokens],
+            "current_input_tokens": [str(x) for x in current_input_tokens],
+            "raw_output_tokens": [str(x) for x in raw_output_tokens],
+            "normalized_candidate_tokens": [str(x) for x in normalized_candidate_tokens],
+            "step_index": int(step_index),
+            "criteria": [
+                "meaning_preservation",
+                "thought_progress",
+                "stability",
+                "stop_readiness",
+            ],
+            "output_format": {
+                "accepted": False,
+                "score_total": 0.0,
+                "reason": "",
+            },
+        }
+
+        try:
+            self._log(f"[EVAL][recursive_state] router_call model={self.model_name or 'auto'}")
+            result = self.router.generate_json(prompt, model_name=self.model_name)
+
+            accepted = bool(result.get("accepted", False))
+            score_total = self._clip01(self._to_float(result.get("score_total"), 0.0))
+
+            return {
+                "accepted": accepted,
+                "score_total": round(score_total, 6),
+                "reason": str(result.get("reason", "")),
+                "step": step_index,
+            }
+        except Exception as exc:
+            self._log(f"[EVAL][recursive_state] fallback reason={type(exc).__name__}:{exc}")
+            return self._fallback_recursive_state(
+                original_input_tokens=original_input_tokens,
+                current_input_tokens=current_input_tokens,
+                raw_output_tokens=raw_output_tokens,
+                normalized_candidate_tokens=normalized_candidate_tokens,
+                step_index=step_index,
+                reason=f"fallback:{type(exc).__name__}:{exc}",
+            )
+        
+    # =========================================================
+    # verbal mode
+    # =========================================================
+
+    def evaluate_verbal_candidates(
+        self,
+        input_tokens: List[str],
+        final_tokens: List[str],
+        candidates: List[str],
+    ) -> Dict[str, Any]:
+        if not candidates:
+            return {"best_text": "", "scores": [], "reason": "no_candidates"}
+
+        if not self.enabled:
+            return self._fallback_verbal_candidates(
+                input_tokens=input_tokens,
+                final_tokens=final_tokens,
+                candidates=candidates,
+                reason="disabled",
+            )
+
+        prompt = {
+            "instruction": (
+                "Return ONLY valid JSON object. No explanation. No markdown. "
+                "Choose the best Japanese sentence candidate."
+            ),
+            "task": "evaluate_text_candidates",
+            "layer": "verbal_surface",
+            "input_tokens": [str(x) for x in input_tokens],
+            "thought_tokens": [str(x) for x in final_tokens],
+            "candidates": [str(x) for x in candidates],
+            "criteria": [
+                "naturalness",
+                "meaning_preservation",
+                "fluency",
+                "conciseness",
+            ],
+            "output_format": {
+                "best_index": 0,
+                "scores": [0.0],
+                "reason": "",
+            },
+        }
+
+        try:
+            self._log(f"[EVAL][verbal_candidates] router_call model={self.model_name or 'auto'}")
+            result = self.router.generate_json(prompt, model_name=self.model_name)
+            return self._normalize_verbal_candidate_evaluation(result, candidates)
+        except Exception as exc:
+            self._log(f"[EVAL][verbal_candidates] fallback reason={type(exc).__name__}:{exc}")
+            return self._fallback_verbal_candidates(
+                input_tokens=input_tokens,
+                final_tokens=final_tokens,
+                candidates=candidates,
+                reason=f"fallback:{type(exc).__name__}:{exc}",
+            )
+
+    def _normalize_verbal_candidate_evaluation(
+        self,
+        result: Dict[str, Any],
+        candidates: Sequence[str],
+    ) -> Dict[str, Any]:
+        candidate_list = [str(x) for x in candidates]
+        if not candidate_list:
+            return {"best_text": "", "scores": [], "reason": "no_candidates"}
+
+        raw_scores = result.get("scores", [])
+        if not isinstance(raw_scores, list):
+            raw_scores = []
+
+        scores: List[float] = []
+        for value in raw_scores[: len(candidate_list)]:
+            scores.append(round(self._clip01(self._to_float(value, 0.0)), 6))
+        while len(scores) < len(candidate_list):
+            scores.append(0.0)
+
+        try:
+            idx = int(result.get("best_index", 0))
+        except Exception:
+            idx = 0
+
+        idx = max(0, min(idx, len(candidate_list) - 1))
+
+        if scores:
+            idx = max(range(len(scores)), key=lambda i: scores[i])
+
+        return {
+            "best_text": candidate_list[idx],
+            "scores": [{"text": candidate_list[i], "score": scores[i]} for i in range(len(candidate_list))],
+            "reason": str(result.get("reason", "")),
+        }
+
+    # =========================================================
+    # fallback
+    # =========================================================
+
+    def _fallback_episode_evaluation(
+        self,
+        episode: Dict[str, Any],
+        reason: str,
+    ) -> Dict[str, Any]:
+        input_tokens = [str(x) for x in episode.get("input_tokens", [])]
+        mid_converged = [str(x) for x in episode.get("mid_converged", [])]
+        final_expanded = [str(x) for x in episode.get("final_expanded", [])]
+        response_text = str(episode.get("response_text", ""))
+
+        input_size = max(1, len(input_tokens))
+        mid_size = len(mid_converged)
+        final_size = len(final_expanded)
+
+        overlap = 0
+        if response_text:
+            for token in input_tokens:
+                if token and token in response_text:
+                    overlap += 1
+        score_response = min(1.0, overlap / input_size + (0.15 if response_text else 0.0))
+
+        if mid_size == 0:
+            score_convergence = 0.15
+        else:
+            ratio = mid_size / input_size
+            if ratio <= 1.5:
+                score_convergence = 0.80
+            elif ratio <= 3.0:
+                score_convergence = 0.60
+            else:
+                score_convergence = 0.35
+
+        if final_size >= input_size:
+            score_divergence = 0.60
+        elif final_size > 0:
+            score_divergence = 0.45
+        else:
+            score_divergence = 0.20
+
+        resp_len = len(response_text)
+        if 4 <= resp_len <= 32:
+            score_naturalness = 0.65
+        elif resp_len > 0:
+            score_naturalness = 0.45
+        else:
+            score_naturalness = 0.10
+
+        complexity = mid_size + final_size
+        if complexity <= 24:
+            score_efficiency = 0.80
+        elif complexity <= 80:
+            score_efficiency = 0.60
+        else:
+            score_efficiency = 0.35
+
+        score_total = (
+            score_response * 0.30
+            + score_divergence * 0.20
+            + score_convergence * 0.20
+            + score_efficiency * 0.15
+            + score_naturalness * 0.15
+        )
+
+        return {
+            "score_response": round(score_response, 6),
+            "score_divergence": round(score_divergence, 6),
+            "score_convergence": round(score_convergence, 6),
+            "score_efficiency": round(score_efficiency, 6),
+            "score_naturalness": round(score_naturalness, 6),
+            "score_total": round(score_total, 6),
+            "reason": reason,
+        }
+
+    def _fallback_verbal_candidates(
+        self,
+        input_tokens: List[str],
+        final_tokens: List[str],
+        candidates: List[str],
+        reason: str,
+    ) -> Dict[str, Any]:
+        scored: List[Dict[str, Any]] = []
+
+        for text in candidates:
+            score = 0.0
+            final_hit = sum(1 for t in final_tokens if t and t in text)
+            input_hit = sum(1 for t in input_tokens if t and t in text)
+
+            score += final_hit * 1.0
+            score += input_hit * 0.2
+
+            if text.endswith(("。", "！", "？", "…")):
+                score += 0.3
+
+            if 4 <= len(text) <= 32:
+                score += 0.4
+            elif len(text) <= 48:
+                score += 0.2
+
+            if "ですです" in text or "はは" in text or "もも" in text:
+                score -= 0.5
+
+            scored.append({"text": text, "score": round(score, 6)})
+
+        scored.sort(key=lambda x: float(x["score"]), reverse=True)
+        best_text = scored[0]["text"] if scored else (candidates[0] if candidates else "")
+
+        return {
+            "best_text": best_text,
+            "scores": scored,
+            "reason": reason,
+        }
+    def _fallback_recursive_state(
+        self,
+        original_input_tokens: List[str],
+        current_input_tokens: List[str],
+        raw_output_tokens: List[str],
+        normalized_candidate_tokens: List[str],
+        step_index: int,
+        reason: str,
+    ) -> Dict[str, Any]:
+        original_set = set(t for t in original_input_tokens if t)
+        raw_set = set(t for t in raw_output_tokens if t)
+        norm_set = set(t for t in normalized_candidate_tokens if t)
+
+        overlap_original = len(original_set & norm_set)
+        overlap_current = len(set(current_input_tokens) & raw_set)
+
+        score_total = 0.0
+        if original_set:
+            score_total += min(0.5, overlap_original / max(1, len(original_set)) * 0.5)
+        if current_input_tokens:
+            score_total += min(0.3, overlap_current / max(1, len(set(current_input_tokens))) * 0.3)
+        if 1 <= len(normalized_candidate_tokens) <= 24:
+            score_total += 0.2
+
+        score_total = self._clip01(score_total)
+        accepted = score_total >= 0.85
+
+        return {
+            "accepted": accepted,
+            "score_total": round(score_total, 6),
+            "reason": reason,
+            "step": step_index,
+        }

@@ -74,7 +74,10 @@ class ConvergencePrimitive:
             "pos_list": pos_list,
             "content_count": content_count,
             "function_count": function_count,
-            "has_predicate": any(p in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula"} for p in pos_list),
+            "has_predicate": any(
+                p in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula"}
+                for p in pos_list
+            ),
             "has_nominal": any(p in {"noun", "pronoun"} for p in pos_list),
             "last_word": anchor_words[-1] if anchor_words else "",
             "last_pos": pos_list[-1] if pos_list else "none",
@@ -102,13 +105,46 @@ class ConvergencePrimitive:
         if grammar.get("function_word", False) and profile["function_count"] >= profile["content_count"] + 1:
             penalty += 1.0
 
-        if pos in {"particle", "particle_case", "particle_binding", "particle_conjunctive", "particle_sentence_final", "auxiliary", "suffix", "verb_suffix", "adjective_na_helper", "iteration_mark"} and not anchor_words:
+        if pos in {
+            "particle",
+            "particle_case",
+            "particle_binding",
+            "particle_conjunctive",
+            "particle_sentence_final",
+            "auxiliary",
+            "suffix",
+            "verb_suffix",
+            "adjective_na_helper",
+            "iteration_mark",
+        } and not anchor_words:
             penalty += 1.6
 
-        if pos in {"particle", "particle_case", "particle_binding", "particle_conjunctive", "particle_sentence_final"} and prev_pos in {"particle", "particle_case", "particle_binding", "particle_conjunctive", "particle_sentence_final", "auxiliary", "verb_suffix", "adjective_na_helper"}:
+        if pos in {
+            "particle",
+            "particle_case",
+            "particle_binding",
+            "particle_conjunctive",
+            "particle_sentence_final",
+        } and prev_pos in {
+            "particle",
+            "particle_case",
+            "particle_binding",
+            "particle_conjunctive",
+            "particle_sentence_final",
+            "auxiliary",
+            "verb_suffix",
+            "adjective_na_helper",
+        }:
             penalty += 1.4
 
-        if pos in {"auxiliary", "verb_suffix"} and prev_pos not in {"verb", "verb_stem", "adjective_i", "copula", "auxiliary", "verb_suffix"}:
+        if pos in {"auxiliary", "verb_suffix"} and prev_pos not in {
+            "verb",
+            "verb_stem",
+            "adjective_i",
+            "copula",
+            "auxiliary",
+            "verb_suffix",
+        }:
             penalty += 1.2
 
         if pos in {"suffix", "iteration_mark"} and prev_pos not in {"noun", "pronoun"}:
@@ -131,7 +167,16 @@ class ConvergencePrimitive:
             bonus += 0.55
         if profile["last_pos"] in {"noun", "pronoun"} and pos in {"particle", "particle_case", "particle_binding"}:
             bonus += 0.35
-        if profile["last_pos"] in {"particle", "particle_case", "particle_binding", "particle_conjunctive"} and pos in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "noun", "pronoun", "copula"}:
+        if profile["last_pos"] in {"particle", "particle_case", "particle_binding", "particle_conjunctive"} and pos in {
+            "verb",
+            "verb_stem",
+            "adjective_i",
+            "adjective_na",
+            "adjective_stem",
+            "noun",
+            "pronoun",
+            "copula",
+        }:
             bonus += 0.25
         if grammar.get("content_word", False):
             bonus += 0.08
@@ -299,7 +344,7 @@ class ConvergenceModel:
                 "episodes_seen": 0,
                 "last_avg_score": 50.0,
             },
-            "version": 2,
+            "version": 3,
         }
 
         if self.model_path and self.model_path.exists():
@@ -458,6 +503,58 @@ class ConvergenceModel:
         except Exception:
             return 50.0
 
+    def _token_retention_weight(self, token: str) -> float:
+        token = str(token)
+
+        if token in {"。", "、", ",", ".", "!", "！", "?", "？"}:
+            return 0.10
+
+        pos = self.primitive.pos_of(token)
+        if pos in {"particle", "particle_case", "particle_binding", "particle_conjunctive", "particle_sentence_final", "auxiliary"}:
+            return 0.20
+        if pos in {"noun", "pronoun"}:
+            return 1.00
+        if pos in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula"}:
+            return 1.10
+        if len(token) == 1:
+            return 0.50
+        return 0.85
+
+    def _weighted_overlap_ratio(self, base_tokens: List[str], kept_tokens: List[str]) -> float:
+        base_unique = self.flatten_unique([str(t) for t in base_tokens if str(t)])
+        if not base_unique:
+            return 0.0
+
+        kept_set = set(str(t) for t in kept_tokens if str(t))
+        total_weight = 0.0
+        kept_weight = 0.0
+
+        for token in base_unique:
+            w = self._token_retention_weight(token)
+            total_weight += w
+            if token in kept_set:
+                kept_weight += w
+
+        if total_weight <= 1e-9:
+            return 0.0
+        return kept_weight / total_weight
+
+    def _compute_retention_metrics(self, ep: Dict[str, Any]) -> Dict[str, float]:
+        input_tokens = self.flatten_unique([str(t) for t in ep.get("input_tokens", []) if str(t)])
+        mid_converged = self.flatten_unique([str(t) for t in ep.get("mid_converged", []) if str(t)])
+        final_expanded = self.flatten_unique([str(t) for t in ep.get("final_expanded", []) if str(t) and str(t) != "。"])
+
+        retention_mid = self._weighted_overlap_ratio(input_tokens, mid_converged)
+        retention_final = self._weighted_overlap_ratio(input_tokens, final_expanded)
+
+        retention_reward = (0.10 * retention_mid) + (0.15 * retention_final)
+
+        return {
+            "retention_mid": round(retention_mid, 6),
+            "retention_final": round(retention_final, 6),
+            "retention_reward": round(retention_reward, 6),
+        }
+
     def update_from_episodes(self, episodes: List[Dict[str, Any]]) -> None:
         if not episodes:
             print("[CONVERGENCE][UPDATE] skip: no episodes", flush=True)
@@ -483,6 +580,9 @@ class ConvergenceModel:
             else:
                 reward = centered * 0.40
 
+            retention = self._compute_retention_metrics(ep)
+            reward_with_retention = reward + float(retention["retention_reward"])
+
             input_tokens = set(ep.get("input_tokens", []))
             initial_core = set(ep.get("initial_core", []))
             mid_converged = set(ep.get("mid_converged", []))
@@ -505,7 +605,11 @@ class ConvergenceModel:
 
             print(
                 f"[CONVERGENCE][EP {idx}] episode_id={ep.get('episode_id')} "
-                f"score_total={total_score:.6f} centered={centered:+.6f} reward={reward:+.6f} "
+                f"score_total={total_score:.6f} centered={centered:+.6f} "
+                f"reward={reward:+.6f} retention_mid={float(retention['retention_mid']):.6f} "
+                f"retention_final={float(retention['retention_final']):.6f} "
+                f"retention_reward={float(retention['retention_reward']):+.6f} "
+                f"reward_total={reward_with_retention:+.6f} "
                 f"kept={len(kept_tokens)} dropped={len(dropped_tokens)}",
                 flush=True,
             )
@@ -521,7 +625,7 @@ class ConvergenceModel:
 
                 current = float(token_keep_bias.get(token, 0.0))
                 new_value = round(
-                    max(-3.0, min(3.0, current + reward * 0.18 * pos_scale)),
+                    max(-3.0, min(3.0, current + reward_with_retention * 0.18 * pos_scale)),
                     6,
                 )
                 token_keep_bias[token] = new_value
@@ -542,7 +646,7 @@ class ConvergenceModel:
                     pos_scale = 0.65
 
                 current = float(token_drop_bias.get(token, 0.0))
-                drop_delta = reward * 0.12 * pos_scale
+                drop_delta = reward_with_retention * 0.12 * pos_scale
                 new_value = round(
                     max(-3.0, min(3.0, current + drop_delta)),
                     6,
