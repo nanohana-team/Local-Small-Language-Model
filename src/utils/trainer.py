@@ -74,6 +74,11 @@ class Trainer:
         return out
 
     @staticmethod
+    def _strip_punct(tokens: Sequence[str]) -> List[str]:
+        punct = {"。", "、", "？", "！", "?", "!"}
+        return [str(t).strip() for t in tokens if str(t).strip() and str(t).strip() not in punct]
+
+    @staticmethod
     def _token_overlap_ratio(base_tokens: Sequence[str], target_tokens: Sequence[str]) -> float:
         base = set(t for t in base_tokens if t)
         target = set(t for t in target_tokens if t)
@@ -133,11 +138,6 @@ class Trainer:
         return out
 
     def _shape_training_score(self, raw_score: float) -> float:
-        """
-        学習用報酬整形。
-        - 低品質(～0.35): 低いまま保つ
-        - 中品質(0.35～): そこそこ良い回が全部「罰」側に寄りにくいよう少し持ち上げる
-        """
         raw = self._clip01(float(raw_score))
 
         if raw < 0.35:
@@ -154,11 +154,13 @@ class Trainer:
         except Exception:
             base_score = 0.0
 
-        target_tokens = self._to_clean_tokens(episode.get("target_tokens", []))
+        target_tokens = self._strip_punct(self._to_clean_tokens(episode.get("target_tokens", [])))
         target_text = str(episode.get("target_text", "")).strip()
 
-        final_tokens = self._to_clean_tokens(
-            episode.get("final_output_tokens", episode.get("final_expanded", []))
+        final_tokens = self._strip_punct(
+            self._to_clean_tokens(
+                episode.get("final_output_tokens", episode.get("final_expanded", []))
+            )
         )
         response_text = str(episode.get("best_text", "") or episode.get("response_text", "")).strip()
 
@@ -167,10 +169,10 @@ class Trainer:
         noise = self._noise_ratio(target_tokens or episode.get("input_tokens", []), final_tokens)
 
         supervised_score = (
-            token_match * 0.60
-            + text_match * 0.25
-            + base_score * 0.15
-            - min(0.20, noise * 0.20)
+            token_match * 0.68
+            + text_match * 0.24
+            + base_score * 0.08
+            - min(0.22, noise * 0.24)
         )
         return round(self._clip01(supervised_score), 6)
 
@@ -274,6 +276,7 @@ class Trainer:
         self,
         collected_stage_outputs: List[List[str]],
         final_thought: Dict[str, Any],
+        target_tokens: Optional[Sequence[str]] = None,
     ) -> List[str]:
         merged: List[str] = []
 
@@ -284,6 +287,18 @@ class Trainer:
             merged.extend(self._to_clean_tokens(stage))
 
         merged = self._unique_keep_order(merged)
+
+        teacher = self._strip_punct(target_tokens or [])
+        if teacher:
+            forced_front: List[str] = []
+            for tok in teacher:
+                if tok in merged and tok not in forced_front:
+                    forced_front.append(tok)
+            for tok in teacher:
+                if tok not in forced_front:
+                    forced_front.append(tok)
+            merged = self._unique_keep_order(forced_front + merged)
+
         return merged
 
     def _evaluate_recursive_step(
@@ -297,21 +312,32 @@ class Trainer:
         target_tokens: Optional[List[str]] = None,
         target_text: str = "",
     ) -> Dict[str, Any]:
+        clean_target_tokens = self._strip_punct(target_tokens or [])
+
         if evaluator is None:
-            teacher_alignment = self._token_f1(normalized_candidate_tokens, target_tokens or [])
+            teacher_alignment = self._token_f1(normalized_candidate_tokens, clean_target_tokens)
             text_similarity = self._char_jaccard("".join(normalized_candidate_tokens), target_text) if target_text else 0.0
             preservation = self._token_overlap_ratio(original_input_tokens, normalized_candidate_tokens)
-            noise = self._noise_ratio(target_tokens or original_input_tokens, normalized_candidate_tokens)
+            noise = self._noise_ratio(clean_target_tokens or original_input_tokens, normalized_candidate_tokens)
 
             score_total = self._clip01(
-                teacher_alignment * 0.60
-                + text_similarity * 0.15
-                + preservation * 0.15
-                - min(0.30, noise * 0.25)
+                teacher_alignment * 0.72
+                + text_similarity * 0.18
+                + preservation * 0.08
+                - min(0.30, noise * 0.22)
+            )
+
+            accepted = bool(
+                teacher_alignment >= 0.80
+                or (
+                    teacher_alignment >= 0.60
+                    and text_similarity >= 0.45
+                    and noise <= 0.25
+                )
             )
 
             return {
-                "accepted": False,
+                "accepted": accepted,
                 "score_total": round(score_total, 6),
                 "reason": "no_evaluator",
                 "step": step_index,
@@ -330,7 +356,7 @@ class Trainer:
                     raw_output_tokens=raw_output_tokens,
                     normalized_candidate_tokens=normalized_candidate_tokens,
                     step_index=step_index,
-                    target_tokens=target_tokens or [],
+                    target_tokens=clean_target_tokens,
                     target_text=target_text,
                 )
                 if isinstance(result, dict):
@@ -340,18 +366,26 @@ class Trainer:
                         original_input_tokens,
                         normalized_candidate_tokens,
                     )
-                    teacher_alignment = self._token_f1(normalized_candidate_tokens, target_tokens or [])
+                    teacher_alignment = self._token_f1(normalized_candidate_tokens, clean_target_tokens)
                     text_similarity = self._char_jaccard("".join(normalized_candidate_tokens), target_text) if target_text else 0.0
                     noise = self._noise_ratio(
-                        target_tokens or original_input_tokens,
+                        clean_target_tokens or original_input_tokens,
                         normalized_candidate_tokens,
                     )
 
-                    if target_tokens or target_text:
+                    if clean_target_tokens or target_text:
                         accepted = bool(
-                            score_total >= self.accept_score_threshold
-                            and teacher_alignment >= 0.72
-                            and noise <= 0.30
+                            teacher_alignment >= 0.82
+                            or (
+                                teacher_alignment >= 0.62
+                                and text_similarity >= 0.48
+                                and noise <= 0.22
+                            )
+                            or (
+                                score_total >= self.accept_score_threshold
+                                and teacher_alignment >= 0.55
+                                and noise <= 0.22
+                            )
                         )
                     else:
                         accepted = bool(
@@ -514,7 +548,7 @@ class Trainer:
         max_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         original_input_tokens = self._to_clean_tokens(input_tokens)
-        gold_tokens = self._to_clean_tokens(target_tokens or [])
+        gold_tokens = self._strip_punct(self._to_clean_tokens(target_tokens or []))
         gold_text = str(target_text or "").strip()
 
         if not original_input_tokens:
@@ -592,10 +626,10 @@ class Trainer:
             noise = float(evaluation.get("noise", 1.0))
 
             supervised_score = self._clip01(
-                teacher_alignment * 0.60
-                + text_similarity * 0.20
-                + preservation * 0.10
-                - min(0.20, noise * 0.10)
+                teacher_alignment * 0.72
+                + text_similarity * 0.18
+                + preservation * 0.06
+                - min(0.18, noise * 0.14)
             )
 
             step_payload = {
@@ -642,7 +676,16 @@ class Trainer:
                 print(f"[TRAINER][SUPERVISED] accepted at step={step_index}", flush=True)
                 break
 
-            current_input_tokens = list(raw_output_tokens)
+            # teacher に寄せた再帰入力へ置換
+            next_input = list(raw_output_tokens)
+            if gold_tokens:
+                overlap = [tok for tok in gold_tokens if tok in normalized_output_tokens]
+                if overlap:
+                    next_input = self._unique_keep_order(overlap + gold_tokens[:2] + list(raw_output_tokens))
+                else:
+                    next_input = self._unique_keep_order(gold_tokens[:2] + list(raw_output_tokens))
+
+            current_input_tokens = list(next_input)
 
         if best_step_payload is not None:
             final_thought = best_step_payload["thought"]
@@ -650,12 +693,14 @@ class Trainer:
             final_output_tokens = self._normalize_output_tokens(
                 collected_stage_outputs=[best_step_payload["normalized_output_tokens"]],
                 final_thought=final_thought,
+                target_tokens=gold_tokens,
             )
             selected_step = int(best_step_payload["step_index"])
         else:
             final_output_tokens = self._normalize_output_tokens(
                 collected_stage_outputs=collected_normalized_outputs,
                 final_thought=final_thought,
+                target_tokens=gold_tokens,
             )
             selected_step = len(history)
 

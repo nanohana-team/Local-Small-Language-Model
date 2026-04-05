@@ -81,6 +81,28 @@ class ChatLearningCentral:
         return len(sa & sb) / max(1, len(sa | sb))
 
     @staticmethod
+    def _token_f1(predicted: Sequence[str], target: Sequence[str]) -> float:
+        pred = [str(x).strip() for x in predicted if str(x).strip()]
+        gold = [str(x).strip() for x in target if str(x).strip()]
+        if not pred and not gold:
+            return 1.0
+        if not pred or not gold:
+            return 0.0
+
+        pred_set = set(pred)
+        gold_set = set(gold)
+
+        tp = len(pred_set & gold_set)
+        if tp <= 0:
+            return 0.0
+
+        precision = tp / max(1, len(pred_set))
+        recall = tp / max(1, len(gold_set))
+        if precision + recall <= 0:
+            return 0.0
+        return 2.0 * precision * recall / (precision + recall)
+
+    @staticmethod
     def _normalize_generated_pair(row: Any) -> Dict[str, Any]:
         if isinstance(row, dict):
             return {
@@ -99,6 +121,99 @@ class ChatLearningCentral:
             "target_tokens": [],
             "target_text": "",
         }
+
+    @staticmethod
+    def _strip_punct_tokens(tokens: Sequence[str]) -> List[str]:
+        punct = {"。", "、", "？", "！", "?", "!"}
+        return [str(x).strip() for x in tokens if str(x).strip() and str(x).strip() not in punct]
+
+    @staticmethod
+    def _candidate_len_penalty(text: str) -> float:
+        t = str(text or "").strip()
+        if not t:
+            return 2.0
+        n = len(t)
+        if n <= 8:
+            return 0.0
+        if n <= 14:
+            return 0.25
+        if n <= 22:
+            return 0.75
+        return 1.4
+
+    def _teacher_priority_score(
+        self,
+        text: str,
+        target_tokens: Sequence[str],
+        target_text: str,
+    ) -> Dict[str, float]:
+        clean_target_tokens = self._strip_punct_tokens(target_tokens)
+        token_hit = 0.0
+        if clean_target_tokens:
+            token_hit = self._token_f1(
+                [tok for tok in clean_target_tokens if tok in text],
+                clean_target_tokens,
+            )
+
+        text_sim = self._char_jaccard(text, target_text) if target_text else 0.0
+        short_bonus = 0.35 if len(str(text or "").strip()) <= max(8, len(target_text) + 2) else 0.0
+        len_penalty = self._candidate_len_penalty(text)
+
+        total = (token_hit * 5.5) + (text_sim * 6.0) + short_bonus - len_penalty
+        return {
+            "token_hit": round(token_hit, 6),
+            "text_sim": round(text_sim, 6),
+            "short_bonus": round(short_bonus, 6),
+            "len_penalty": round(len_penalty, 6),
+            "teacher_priority_total": round(total, 6),
+        }
+
+    def _choose_teacher_forced_candidate(
+        self,
+        candidates: List[str],
+        target_tokens: Sequence[str],
+        target_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not candidates:
+            return None
+        if not target_tokens and not target_text:
+            return None
+
+        scored: List[Dict[str, Any]] = []
+        for text in candidates:
+            metrics = self._teacher_priority_score(
+                text=text,
+                target_tokens=target_tokens,
+                target_text=target_text,
+            )
+            scored.append(
+                {
+                    "text": text,
+                    **metrics,
+                }
+            )
+
+        scored.sort(key=lambda x: float(x["teacher_priority_total"]), reverse=True)
+        best = scored[0]
+
+        # teacher との近さが十分なら外部 evaluator を通さず即採用
+        strong_match = (
+            best["text_sim"] >= 0.62
+            or best["token_hit"] >= 0.72
+            or (
+                best["text_sim"] >= 0.42
+                and best["token_hit"] >= 0.45
+                and len(str(best["text"]).strip()) <= max(10, len(target_text) + 2)
+            )
+        )
+        if strong_match:
+            return {
+                "best_text": str(best["text"]),
+                "scores": scored,
+                "reason": "teacher_forced_priority",
+            }
+
+        return None
 
     def generate_teacher_pair(self) -> Dict[str, Any]:
         if self.teacher_generator is None:
@@ -250,6 +365,57 @@ class ChatLearningCentral:
                 "reason": "no_candidates",
             }
 
+        # まず teacher 強制優先
+        forced = self._choose_teacher_forced_candidate(
+            candidates=candidates,
+            target_tokens=target_tokens,
+            target_text=target_text,
+        )
+        if forced is not None:
+            self._log(
+                f"[CHAT_CENTRAL][TEACHER_FORCE] selected={json.dumps(forced['best_text'], ensure_ascii=False)}",
+                force=True,
+            )
+            return forced
+
+        # target があるときは external evaluator より先に local rescoring を使う
+        if target_tokens or target_text:
+            model = load_verbal_model(self.verbal_model_path)
+            local_scores = score_candidates_locally(
+                candidates=candidates,
+                final_tokens=final_tokens,
+                original_input=input_tokens,
+                model=model,
+            )
+
+            rescored: List[Dict[str, Any]] = []
+            for row in local_scores:
+                text = str(row.get("text", ""))
+                base_score = float(row.get("score", 0.0))
+                teacher_metrics = self._teacher_priority_score(
+                    text=text,
+                    target_tokens=target_tokens,
+                    target_text=target_text,
+                )
+
+                total = base_score + teacher_metrics["teacher_priority_total"]
+                rescored.append(
+                    {
+                        "text": text,
+                        "score": round(total, 6),
+                        "base_score": round(base_score, 6),
+                        **teacher_metrics,
+                    }
+                )
+
+            rescored.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+            return {
+                "best_text": rescored[0]["text"] if rescored else candidates[0],
+                "scores": rescored,
+                "reason": "local_teacher_hard_priority",
+            }
+
+        # teacher なしのときだけ external evaluator を使う
         method = getattr(self.evaluator, "evaluate_verbal_candidates", None)
         if callable(method):
             try:
@@ -278,39 +444,6 @@ class ChatLearningCentral:
             original_input=input_tokens,
             model=model,
         )
-
-        if target_tokens or target_text:
-            rescored: List[Dict[str, Any]] = []
-            target_set = set(target_tokens)
-
-            for row in local_scores:
-                text = str(row.get("text", ""))
-                base_score = float(row.get("score", 0.0))
-
-                token_bonus = 0.0
-                if target_set:
-                    text_hit = sum(1 for tok in target_set if tok and tok in text)
-                    token_bonus += text_hit * 2.2
-
-                char_bonus = self._char_jaccard(text, target_text) * 4.0 if target_text else 0.0
-
-                total = base_score + token_bonus + char_bonus
-                rescored.append(
-                    {
-                        "text": text,
-                        "score": round(total, 6),
-                        "base_score": round(base_score, 6),
-                        "target_token_bonus": round(token_bonus, 6),
-                        "target_text_bonus": round(char_bonus, 6),
-                    }
-                )
-
-            rescored.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
-            return {
-                "best_text": rescored[0]["text"] if rescored else candidates[0],
-                "scores": rescored,
-                "reason": "local_target_priority",
-            }
 
         local_scores.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
         return {

@@ -4,7 +4,7 @@ import json
 import math
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from src.core.io.lsd_lexicon import load_lexicon_entries
 
@@ -38,6 +38,9 @@ _FUNCTION_POS = {
     "auxiliary", "copula", "suffix", "prefix", "verb_suffix", "adjective_na_helper", "iteration_mark",
 }
 
+UnknownWordResolver = Callable[[str], Optional[Dict[str, Any]]]
+UnknownWordPersistor = Callable[[Dict[str, Dict[str, Any]]], None]
+
 
 class DivergencePrimitive:
     def __init__(
@@ -45,16 +48,16 @@ class DivergencePrimitive:
         lexicon: Mapping[str, Any],
         weights: Dict[str, float] | None = None,
         random_seed: int | None = None,
-        randomness: float = 0.08,
+        randomness: float = 0.04,
         candidate_expansion: int = 2,
-        seed_anchor_strength: float = 0.75,
-        current_anchor_strength: float = 0.45,
-        lexical_anchor_strength: float = 0.35,
-        keep_input_bonus: float = 0.20,
-        max_content_pool: int = 1200,
-        max_function_pool: int = 140,
-        per_pos_limit: int = 180,
-        shortlist_factor: int = 8,
+        seed_anchor_strength: float = 0.95,
+        current_anchor_strength: float = 0.60,
+        lexical_anchor_strength: float = 0.55,
+        keep_input_bonus: float = 0.45,
+        max_content_pool: int = 600,
+        max_function_pool: int = 80,
+        per_pos_limit: int = 96,
+        shortlist_factor: int = 6,
     ) -> None:
         self.lexicon = self.normalize_lexicon(lexicon)
         self.axes = self._infer_axes(self.lexicon)
@@ -65,6 +68,21 @@ class DivergencePrimitive:
                 if norm_key in self.weights:
                     self.weights[norm_key] = float(value)
 
+        self.randomness = max(0.0, float(randomness))
+        self.candidate_expansion = max(1, int(candidate_expansion))
+        self.seed_anchor_strength = max(0.0, float(seed_anchor_strength))
+        self.current_anchor_strength = max(0.0, float(current_anchor_strength))
+        self.lexical_anchor_strength = max(0.0, float(lexical_anchor_strength))
+        self.keep_input_bonus = max(0.0, float(keep_input_bonus))
+        self.max_content_pool = max(120, int(max_content_pool))
+        self.max_function_pool = max(12, int(max_function_pool))
+        self.per_pos_limit = max(20, int(per_pos_limit))
+        self.shortlist_factor = max(2, int(shortlist_factor))
+        self.rng = random.Random(random_seed)
+
+        self._rebuild_indices()
+
+    def _rebuild_indices(self) -> None:
         self.category_centroids = self._build_category_centroids()
         self.words_by_pos = self._build_words_by_pos()
         self.content_words = [w for w in self.lexicon if self.grammar_of(w).get("content_word", False)]
@@ -79,18 +97,6 @@ class DivergencePrimitive:
             self.word_vectors[word] = tup
             self.word_axis_sums[word] = sum(tup)
             self.word_char_sets[word] = set(word)
-
-        self.randomness = max(0.0, float(randomness))
-        self.candidate_expansion = max(1, int(candidate_expansion))
-        self.seed_anchor_strength = max(0.0, float(seed_anchor_strength))
-        self.current_anchor_strength = max(0.0, float(current_anchor_strength))
-        self.lexical_anchor_strength = max(0.0, float(lexical_anchor_strength))
-        self.keep_input_bonus = max(0.0, float(keep_input_bonus))
-        self.max_content_pool = max(200, int(max_content_pool))
-        self.max_function_pool = max(20, int(max_function_pool))
-        self.per_pos_limit = max(30, int(per_pos_limit))
-        self.shortlist_factor = max(2, int(shortlist_factor))
-        self.rng = random.Random(random_seed)
 
     @classmethod
     def load_lexicon(cls, path: str | Path) -> Dict[str, Dict[str, Any]]:
@@ -195,7 +201,12 @@ class DivergencePrimitive:
             "independent": independent,
             "dependency_mode": dependency_mode,
             "can_start": bool(raw_grammar.get("can_start", pos not in _FUNCTION_POS)),
-            "can_end": bool(raw_grammar.get("can_end", pos in {"noun", "pronoun", "verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "auxiliary", "interjection"})),
+            "can_end": bool(
+                raw_grammar.get(
+                    "can_end",
+                    pos in {"noun", "pronoun", "verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "auxiliary", "interjection"},
+                )
+            ),
             "content_word": bool(raw_grammar.get("content_word", pos in _CONTENT_POS)),
             "function_word": bool(raw_grammar.get("function_word", pos in _FUNCTION_POS)),
             "requires_prev": cls._to_string_list(raw_grammar.get("requires_prev")),
@@ -231,10 +242,110 @@ class DivergencePrimitive:
     def has_word(self, word: str) -> bool:
         return word in self.lexicon
 
+    def normalize_entry_for_word(self, word: str, raw_entry: Mapping[str, Any]) -> Dict[str, Any]:
+        if not isinstance(raw_entry, Mapping):
+            raise TypeError("raw_entry must be a mapping")
+
+        raw_word = str(raw_entry.get("word", word)).strip() or str(word).strip()
+        if not raw_word:
+            raise ValueError("word is required")
+
+        raw_vector = raw_entry.get("vector") or raw_entry.get("axes") or raw_entry.get("params")
+        if not isinstance(raw_vector, Mapping):
+            raise ValueError(f"missing vector for word={raw_word}")
+
+        vector = {
+            self._normalize_axis_name(axis): float(value)
+            for axis, value in raw_vector.items()
+            if self._normalize_axis_name(axis)
+        }
+        if not vector:
+            raise ValueError(f"empty vector for word={raw_word}")
+
+        normalized_vector: Dict[str, float] = {}
+        for axis in self.axes:
+            normalized_vector[axis] = float(vector.get(axis, 0.0))
+
+        grammar = self._normalize_grammar(raw_entry.get("grammar", {}), raw_entry)
+        category = str(raw_entry.get("category", self.guess_category(raw_word))).strip() or self.guess_category(raw_word)
+
+        entry: Dict[str, Any] = {
+            "word": raw_word,
+            "category": category,
+            "vector": normalized_vector,
+            "grammar": grammar,
+        }
+        if "hierarchy" in raw_entry:
+            entry["hierarchy"] = list(raw_entry.get("hierarchy", []))
+        return entry
+
+    def register_word(self, word: str, raw_entry: Mapping[str, Any]) -> Dict[str, Any]:
+        entry = self.normalize_entry_for_word(word, raw_entry)
+        self.lexicon[entry["word"]] = entry
+        self._rebuild_indices()
+        return entry
+
+    def register_words(self, entries: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        added: Dict[str, Dict[str, Any]] = {}
+        for word, raw_entry in entries.items():
+            try:
+                entry = self.normalize_entry_for_word(word, raw_entry)
+            except Exception:
+                continue
+            self.lexicon[entry["word"]] = entry
+            added[entry["word"]] = entry
+
+        if added:
+            self._rebuild_indices()
+        return added
+
+    def resolve_unknown_words(
+        self,
+        words: Iterable[str],
+        resolver: UnknownWordResolver | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        if resolver is None:
+            return {}
+
+        added: Dict[str, Dict[str, Any]] = {}
+        unknowns = [str(w) for w in words if str(w) and not self.has_word(str(w))]
+        if not unknowns:
+            return added
+
+        for word in list(dict.fromkeys(unknowns)):
+            try:
+                resolved = resolver(word)
+            except Exception as e:
+                print(f"[UNKNOWN][RESOLVE][ERROR] word={word} error={e}", flush=True)
+                continue
+
+            if not resolved:
+                print(f"[UNKNOWN][RESOLVE][MISS] word={word}", flush=True)
+                continue
+
+            try:
+                entry = self.register_word(word, resolved)
+            except Exception as e:
+                print(f"[UNKNOWN][REGISTER][ERROR] word={word} error={e}", flush=True)
+                continue
+
+            added[word] = entry
+            print(
+                f"[UNKNOWN][REGISTERED] word={word} "
+                f"category={entry.get('category')} pos={entry.get('grammar', {}).get('pos')}",
+                flush=True,
+            )
+
+        return added
+
     def entry_of(self, word: str) -> Dict[str, Any]:
         if word in self.lexicon:
             return self.lexicon[word]
-        return {"category": self.guess_category(word), "vector": self.estimate_oov_vector(word), "grammar": self.guess_grammar(word)}
+        return {
+            "category": self.guess_category(word),
+            "vector": self.estimate_oov_vector(word),
+            "grammar": self.guess_grammar(word),
+        }
 
     def grammar_of(self, word: str) -> Dict[str, Any]:
         return dict(self.entry_of(word).get("grammar", {}))
@@ -289,21 +400,76 @@ class DivergencePrimitive:
         adnominals = {"この", "その", "あの", "どの", "ある", "あらゆる"}
 
         if word == "々":
-            return self._normalize_grammar({"pos": "iteration_mark", "subpos": "kanji_repetition", "independent": False, "can_start": False, "can_end": False, "requires_prev": ["noun", "pronoun"], "requires_next": ["particle_case", "particle_binding", "copula", "none"], "forbid_prev": ["particle_case", "particle_binding", "auxiliary", "iteration_mark"], "forbid_next": ["iteration_mark"]})
+            return self._normalize_grammar({
+                "pos": "iteration_mark",
+                "subpos": "kanji_repetition",
+                "independent": False,
+                "can_start": False,
+                "can_end": False,
+                "requires_prev": ["noun", "pronoun"],
+                "requires_next": ["particle_case", "particle_binding", "copula", "none"],
+                "forbid_prev": ["particle_case", "particle_binding", "auxiliary", "iteration_mark"],
+                "forbid_next": ["iteration_mark"],
+            })
         if word in particles_case:
-            return self._normalize_grammar({"pos": "particle_case", "independent": False, "can_start": False, "can_end": False, "requires_prev": ["noun", "pronoun", "iteration_mark"], "requires_next": ["verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "noun"]})
+            return self._normalize_grammar({
+                "pos": "particle_case",
+                "independent": False,
+                "can_start": False,
+                "can_end": False,
+                "requires_prev": ["noun", "pronoun", "iteration_mark"],
+                "requires_next": ["verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "noun"],
+            })
         if word in particles_binding:
-            return self._normalize_grammar({"pos": "particle_binding", "independent": False, "can_start": False, "can_end": False, "requires_prev": ["noun", "pronoun", "phrase", "iteration_mark"], "requires_next": ["verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "noun"]})
+            return self._normalize_grammar({
+                "pos": "particle_binding",
+                "independent": False,
+                "can_start": False,
+                "can_end": False,
+                "requires_prev": ["noun", "pronoun", "phrase", "iteration_mark"],
+                "requires_next": ["verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "noun"],
+            })
         if word in particles_conjunctive:
-            return self._normalize_grammar({"pos": "particle_conjunctive", "independent": False, "can_start": False, "can_end": False, "requires_prev": ["verb_stem", "verb_suffix", "auxiliary", "adjective_stem"]})
+            return self._normalize_grammar({
+                "pos": "particle_conjunctive",
+                "independent": False,
+                "can_start": False,
+                "can_end": False,
+                "requires_prev": ["verb_stem", "verb_suffix", "auxiliary", "adjective_stem"],
+            })
         if word in particles_sentence:
-            return self._normalize_grammar({"pos": "particle_sentence_final", "independent": False, "can_start": False, "can_end": True, "requires_prev": ["verb", "verb_stem", "verb_suffix", "adjective_i", "adjective_na", "adjective_stem", "copula", "auxiliary"]})
+            return self._normalize_grammar({
+                "pos": "particle_sentence_final",
+                "independent": False,
+                "can_start": False,
+                "can_end": True,
+                "requires_prev": ["verb", "verb_stem", "verb_suffix", "adjective_i", "adjective_na", "adjective_stem", "copula", "auxiliary"],
+            })
         if word in copula:
-            return self._normalize_grammar({"pos": "copula", "independent": False, "can_start": False, "can_end": True, "requires_prev": ["noun", "adjective_na", "adjective_stem"]})
+            return self._normalize_grammar({
+                "pos": "copula",
+                "independent": False,
+                "can_start": False,
+                "can_end": True,
+                "requires_prev": ["noun", "adjective_na", "adjective_stem"],
+            })
         if word in auxiliaries:
-            return self._normalize_grammar({"pos": "auxiliary", "independent": False, "can_start": False, "can_end": True, "requires_prev": ["verb", "verb_stem", "verb_suffix", "adjective_i", "copula"], "requires_next": ["auxiliary", "particle", "particle_sentence_final", "none"]})
+            return self._normalize_grammar({
+                "pos": "auxiliary",
+                "independent": False,
+                "can_start": False,
+                "can_end": True,
+                "requires_prev": ["verb", "verb_stem", "verb_suffix", "adjective_i", "copula"],
+                "requires_next": ["auxiliary", "particle", "particle_sentence_final", "none"],
+            })
         if word in conjunctions:
-            return self._normalize_grammar({"pos": "conjunction", "independent": True, "can_start": True, "can_end": False, "requires_next": ["noun", "pronoun", "verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem"]})
+            return self._normalize_grammar({
+                "pos": "conjunction",
+                "independent": True,
+                "can_start": True,
+                "can_end": False,
+                "requires_next": ["noun", "pronoun", "verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem"],
+            })
         if word in interjections:
             return self._normalize_grammar({"pos": "interjection", "independent": True, "can_start": True, "can_end": True})
         if word in adnominals:
@@ -456,6 +622,8 @@ class DivergencePrimitive:
             return {"auxiliary", "particle_sentence_final", "particle_conjunctive", "noun", "adverb"}
         if src_pos in {"adjective_i", "adjective_stem"}:
             return {"noun", "copula", "particle_case", "adverb", "particle_sentence_final"}
+        if src_pos == "particle_sentence_final":
+            return {"interjection", "copula", "auxiliary", "verb", "adjective_i", "noun"}
         return {"noun", "pronoun", "verb", "verb_stem", "adjective_i", "adjective_stem", "adverb"}
 
     def _candidate_universe(self, allow_function_words: bool, source_word: str, context_words: List[str], seed_words: List[str], current_words: List[str]) -> List[str]:
@@ -523,9 +691,9 @@ class DivergencePrimitive:
                 continue
             cheap_score = abs(self.word_axis_sums.get(word, 0.0) - target_sum)
             if word in seed_words:
-                cheap_score -= 0.20
+                cheap_score -= 0.30
             if word in current_words:
-                cheap_score -= 0.12
+                cheap_score -= 0.18
             cheap.append((word, cheap_score))
 
         cheap.sort(key=lambda x: x[1])
@@ -562,7 +730,7 @@ class DivergencePrimitive:
 
         head = candidate_pool[:top_k]
         tail = candidate_pool[top_k:]
-        mix_count = min(len(tail), max(1, top_k // 4))
+        mix_count = min(len(tail), max(1, top_k // 5))
         chosen_tail = self.rng.sample(tail, mix_count) if mix_count > 0 else []
         chosen = head[: max(1, top_k - mix_count)] + chosen_tail
         chosen.sort(key=lambda x: x[1])
@@ -574,7 +742,7 @@ class DivergencePrimitive:
         depth: int = 2,
         top_k: int = 5,
         direction_bias: Dict[str, float] | None = None,
-        seed_blend_ratio: float = 0.20,
+        seed_blend_ratio: float = 0.12,
         allow_function_words: bool = True,
     ) -> Dict[str, Any]:
         direction_bias = {self._normalize_axis_name(k): float(v) for k, v in (direction_bias or {}).items()}
@@ -673,15 +841,21 @@ class DivergenceModel:
         lexicon: Mapping[str, Any],
         weights: Dict[str, float] | None = None,
         random_seed: int | None = None,
-        randomness: float = 0.08,
-        candidate_expansion: int = 6,
-        default_branch: int = 64,
-        final_branch: int = 24,
+        randomness: float = 0.04,
+        candidate_expansion: int = 4,
+        default_branch: int = 32,
+        final_branch: int = 16,
         model_path: str | Path | None = None,
+        unknown_word_resolver: UnknownWordResolver | None = None,
+        persist_unknown_words: UnknownWordPersistor | None = None,
+        auto_resolve_unknown_words: bool = True,
     ) -> None:
         self.default_branch = max(1, int(default_branch))
         self.final_branch = max(1, int(final_branch))
         self.model_path = Path(model_path) if model_path else None
+        self.unknown_word_resolver = unknown_word_resolver
+        self.persist_unknown_words = persist_unknown_words
+        self.auto_resolve_unknown_words = bool(auto_resolve_unknown_words)
 
         self.state: Dict[str, Any] = {
             "weights": dict(weights or {}),
@@ -691,9 +865,9 @@ class DivergenceModel:
             "final_branch": self.final_branch,
             "learning_meta": {
                 "episodes_seen": 0,
-                "last_avg_score": 50.0,
+                "last_avg_score": 0.5,
             },
-            "version": 2,
+            "version": 4,
         }
 
         if self.model_path and self.model_path.exists():
@@ -743,6 +917,19 @@ class DivergenceModel:
             out.append(token)
         return out
 
+    def ensure_words_registered(self, words: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        if not self.auto_resolve_unknown_words or self.unknown_word_resolver is None:
+            return {}
+
+        added = self.primitive.resolve_unknown_words(words, resolver=self.unknown_word_resolver)
+        if added and self.persist_unknown_words is not None:
+            try:
+                self.persist_unknown_words(added)
+                print(f"[UNKNOWN][PERSIST] added={len(added)}", flush=True)
+            except Exception as e:
+                print(f"[UNKNOWN][PERSIST][ERROR] error={e}", flush=True)
+        return added
+
     def expand(
         self,
         token: str,
@@ -750,6 +937,8 @@ class DivergenceModel:
         top_k: Optional[int] = None,
         allow_function_words: bool = True,
     ) -> List[str]:
+        self.ensure_words_registered([token] + list(context or []))
+
         result = self.primitive.diverge(
             input_words=[token],
             depth=1,
@@ -773,6 +962,8 @@ class DivergenceModel:
         top_k: Optional[int] = None,
         allow_function_words: bool = True,
     ) -> Dict[str, Any]:
+        self.ensure_words_registered(tokens)
+
         branch = int(top_k or self.default_branch)
         current_tokens = self.flatten_unique(tokens)
         steps: List[Dict[str, Any]] = []
@@ -815,6 +1006,8 @@ class DivergenceModel:
         original_input: Optional[List[str]] = None,
         top_k: Optional[int] = None,
     ) -> List[str]:
+        self.ensure_words_registered(list(tokens) + list(original_input or []))
+
         branch = int(top_k or self.final_branch)
         tokens = self.flatten_unique(tokens)
         if not tokens:
@@ -892,9 +1085,10 @@ class DivergenceModel:
     def _safe_score(self, ep: Dict[str, Any]) -> float:
         evaluation = ep.get("evaluation") or {}
         try:
-            return float(evaluation.get("score_total", 50.0))
+            score = float(evaluation.get("score_total", 0.0))
         except Exception:
-            return 50.0
+            score = 0.0
+        return max(0.0, min(1.0, score))
 
     def _episode_axis_signal(self, ep: Dict[str, Any]) -> Dict[str, float]:
         signal = {axis: 0.0 for axis in self.axes}
@@ -902,28 +1096,39 @@ class DivergenceModel:
         input_tokens = list(ep.get("input_tokens", []))
         initial_core = list(ep.get("initial_core", []))
         mid_converged = list(ep.get("mid_converged", []))
-        final_expanded = list(ep.get("final_expanded", []))
-        response_tokens = [t for t in final_expanded if t != "。"]
+        final_expanded = [t for t in ep.get("final_expanded", []) if t != "。"]
+        target_tokens = [t for t in ep.get("target_tokens", []) if str(t).strip() and str(t).strip() not in {"。", "、", "？", "！"}]
 
-        if not response_tokens:
-            response_tokens = list(mid_converged)
+        if not final_expanded:
+            final_expanded = list(mid_converged)
 
         input_vec = self.primitive.blend_vector(input_tokens) if input_tokens else {axis: 0.0 for axis in self.axes}
         core_vec = self.primitive.blend_vector(initial_core) if initial_core else input_vec
         mid_vec = self.primitive.blend_vector(mid_converged) if mid_converged else core_vec
-        out_vec = self.primitive.blend_vector(response_tokens) if response_tokens else mid_vec
+        out_vec = self.primitive.blend_vector(final_expanded) if final_expanded else mid_vec
 
-        for axis in self.axes:
-            drift_from_input = abs(out_vec[axis] - input_vec[axis])
-            drift_from_core = abs(out_vec[axis] - core_vec[axis])
-            drift_mid = abs(out_vec[axis] - mid_vec[axis])
+        if target_tokens:
+            target_vec = self.primitive.blend_vector(target_tokens)
+            for axis in self.axes:
+                input_err = abs(input_vec[axis] - target_vec[axis])
+                core_err = abs(core_vec[axis] - target_vec[axis])
+                mid_err = abs(mid_vec[axis] - target_vec[axis])
+                out_err = abs(out_vec[axis] - target_vec[axis])
 
-            signal[axis] = (
-                0.35 * drift_from_input
-                + 0.35 * drift_from_core
-                + 0.20 * drift_mid
-                - 0.15 * abs(mid_vec[axis] - input_vec[axis])
-            )
+                improvement = (input_err - out_err) + 0.5 * (core_err - mid_err)
+                signal[axis] = improvement
+        else:
+            for axis in self.axes:
+                drift_from_input = abs(out_vec[axis] - input_vec[axis])
+                drift_from_core = abs(out_vec[axis] - core_vec[axis])
+                drift_mid = abs(out_vec[axis] - mid_vec[axis])
+
+                signal[axis] = (
+                    0.30 * drift_from_input
+                    + 0.30 * drift_from_core
+                    + 0.20 * drift_mid
+                    - 0.12 * abs(mid_vec[axis] - input_vec[axis])
+                )
 
         return signal
 
@@ -931,6 +1136,15 @@ class DivergenceModel:
         if not episodes:
             print("[DIVERGENCE][UPDATE] skip: no episodes", flush=True)
             return
+
+        words_to_check: List[str] = []
+        for ep in episodes:
+            words_to_check.extend(ep.get("input_tokens", []))
+            words_to_check.extend(ep.get("initial_core", []))
+            words_to_check.extend(ep.get("mid_converged", []))
+            words_to_check.extend(ep.get("final_expanded", []))
+            words_to_check.extend(ep.get("target_tokens", []))
+        self.ensure_words_registered(words_to_check)
 
         weights = dict(self.state.get("weights", {}))
         learning_meta = dict(self.state.get("learning_meta", {}))
@@ -943,17 +1157,14 @@ class DivergenceModel:
 
         for idx, ep in enumerate(episodes, start=1):
             score_total = self._safe_score(ep)
-            total_score_sum += score_total
-            episode_count += 1
-
-            centered = (score_total - 50.0) / 50.0
-            if centered >= 0:
-                reward = centered
-            else:
-                reward = centered * 0.45
+            centered = (score_total * 2.0) - 1.0
+            reward = centered if centered >= 0.0 else centered * 0.50
 
             axis_signal = self._episode_axis_signal(ep)
             signal_abs_sum = sum(abs(v) for v in axis_signal.values()) or 1.0
+
+            total_score_sum += score_total
+            episode_count += 1
 
             print(
                 f"[DIVERGENCE][EP {idx}] episode_id={ep.get('episode_id')} "
@@ -962,6 +1173,8 @@ class DivergenceModel:
             )
 
             top_signals = sorted(axis_signal.items(), key=lambda x: abs(x[1]), reverse=True)[:8]
+            top_signal_axes = {axis for axis, _ in top_signals}
+
             for axis, raw_signal in top_signals:
                 normalized_signal = raw_signal / signal_abs_sum
                 axis_delta_sum[axis] += reward * normalized_signal
@@ -972,9 +1185,10 @@ class DivergenceModel:
                 )
 
             for axis in self.axes:
-                if axis not in dict(top_signals):
-                    normalized_signal = axis_signal[axis] / signal_abs_sum
-                    axis_delta_sum[axis] += reward * normalized_signal
+                if axis in top_signal_axes:
+                    continue
+                normalized_signal = axis_signal[axis] / signal_abs_sum
+                axis_delta_sum[axis] += reward * normalized_signal
 
         if episode_count <= 0:
             print("[DIVERGENCE][UPDATE] stop: episode_count=0", flush=True)
@@ -988,8 +1202,8 @@ class DivergenceModel:
         for axis in self.axes:
             current = float(weights.get(axis, 1.0))
             raw_delta = axis_delta_sum[axis]
-            delta = max(-0.08, min(0.08, raw_delta))
-            new_value = max(0.25, min(3.0, current + delta))
+            delta = max(-0.05, min(0.05, raw_delta * 0.75))
+            new_value = max(0.40, min(2.50, current + delta))
             rounded_new = round(new_value, 6)
             weights[axis] = rounded_new
             axis_change_logs.append((axis, current, rounded_new, rounded_new - current))

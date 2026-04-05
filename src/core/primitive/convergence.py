@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
-from src.core.primitive.divergence import DivergenceModel, DivergencePrimitive
+from src.core.primitive.divergence import (
+    DivergenceModel,
+    DivergencePrimitive,
+    UnknownWordPersistor,
+    UnknownWordResolver,
+)
 
 
 class ConvergencePrimitive:
@@ -14,8 +19,8 @@ class ConvergencePrimitive:
         lexicon: Dict[str, Dict[str, Any]] | None = None,
         weights: Dict[str, float] | None = None,
         random_seed: int | None = None,
-        randomness: float = 0.16,
-        candidate_expansion: int = 3,
+        randomness: float = 0.08,
+        candidate_expansion: int = 2,
         divergence_instance: DivergencePrimitive | None = None,
     ) -> None:
         if divergence_instance is not None:
@@ -34,6 +39,31 @@ class ConvergencePrimitive:
 
     def has_word(self, word: str) -> bool:
         return self.div.has_word(word)
+
+    def register_word(self, word: str, raw_entry: Mapping[str, Any]) -> Dict[str, Any]:
+        entry = self.div.register_word(word, raw_entry)
+        self.lexicon = self.div.lexicon
+        self.axes = self.div.axes
+        self.weights = self.div.weights
+        return entry
+
+    def register_words(self, entries: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        added = self.div.register_words(entries)
+        self.lexicon = self.div.lexicon
+        self.axes = self.div.axes
+        self.weights = self.div.weights
+        return added
+
+    def resolve_unknown_words(
+        self,
+        words: Iterable[str],
+        resolver: UnknownWordResolver | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        added = self.div.resolve_unknown_words(words, resolver=resolver)
+        self.lexicon = self.div.lexicon
+        self.axes = self.div.axes
+        self.weights = self.div.weights
+        return added
 
     def vector_of(self, word: str) -> Dict[str, float]:
         return self.div.vector_of(word)
@@ -65,6 +95,20 @@ class ConvergencePrimitive:
             return 0.0
         vec = self.vector_of(word)
         return min(self.weighted_distance(vec, self.vector_of(w)) for w in input_words)
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return str(text or "").strip().replace(" ", "").replace("　", "")
+
+    @staticmethod
+    def _char_jaccard(a: str, b: str) -> float:
+        sa = set(ConvergencePrimitive._normalize_text(a))
+        sb = set(ConvergencePrimitive._normalize_text(b))
+        if not sa and not sb:
+            return 1.0
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / max(1, len(sa | sb))
 
     def _context_profile(self, anchor_words: List[str]) -> Dict[str, Any]:
         pos_list = [self.pos_of(w) for w in anchor_words]
@@ -197,6 +241,8 @@ class ConvergencePrimitive:
         candidate_counts: Dict[str, int] | None = None,
         token_keep_bias: Dict[str, float] | None = None,
         token_drop_bias: Dict[str, float] | None = None,
+        desired_tokens: List[str] | None = None,
+        desired_text: str = "",
     ) -> Dict[str, Any]:
         avg_input_distance = self.avg_distance_to_inputs(word, anchor_words)
         min_input_distance = self.min_distance_to_inputs(word, anchor_words)
@@ -212,7 +258,22 @@ class ConvergencePrimitive:
         keep_bias = float((token_keep_bias or {}).get(word, 0.0))
         drop_bias = float((token_drop_bias or {}).get(word, 0.0))
 
-        base_final_score = avg_input_distance + grammar_penalty - role_bonus - recurrence_bonus - keep_bias + drop_bias
+        teacher_bonus = 0.0
+        desired_set = set(desired_tokens or [])
+        if word in desired_set:
+            teacher_bonus += 1.40
+        if desired_text and word and word in desired_text:
+            teacher_bonus += 0.55
+
+        base_final_score = (
+            avg_input_distance
+            + grammar_penalty
+            - role_bonus
+            - recurrence_bonus
+            - keep_bias
+            + drop_bias
+            - teacher_bonus
+        )
         randomized_final_score = self._randomized_score(base_final_score)
         return {
             "word": word,
@@ -225,11 +286,17 @@ class ConvergencePrimitive:
             "recurrence": recurrence,
             "keep_bias": round(keep_bias, 6),
             "drop_bias": round(drop_bias, 6),
+            "teacher_bonus": round(teacher_bonus, 6),
             "base_final_score": round(base_final_score, 6),
             "final_score": round(randomized_final_score, 6),
         }
 
-    def build_sentence_candidates(self, anchor_words: List[str], scored_candidates: List[Dict[str, Any]], top_n: int) -> List[str]:
+    def build_sentence_candidates(
+        self,
+        anchor_words: List[str],
+        scored_candidates: List[Dict[str, Any]],
+        top_n: int,
+    ) -> List[str]:
         current = list(anchor_words)
         selected_words: List[str] = []
         for item in scored_candidates:
@@ -251,6 +318,8 @@ class ConvergencePrimitive:
         anchor_words: List[str] | None = None,
         token_keep_bias: Dict[str, float] | None = None,
         token_drop_bias: Dict[str, float] | None = None,
+        desired_tokens: List[str] | None = None,
+        desired_text: str = "",
     ) -> Dict[str, Any]:
         _ = bias
 
@@ -279,6 +348,8 @@ class ConvergencePrimitive:
                 candidate_counts=candidate_counts,
                 token_keep_bias=token_keep_bias,
                 token_drop_bias=token_drop_bias,
+                desired_tokens=desired_tokens,
+                desired_text=desired_text,
             )
             for word in unique_candidates
         ]
@@ -329,11 +400,18 @@ class ConvergenceModel:
         divergence_model: DivergenceModel | None = None,
         weights: Dict[str, float] | None = None,
         random_seed: int | None = None,
-        randomness: float = 0.16,
-        candidate_expansion: int = 3,
+        randomness: float = 0.08,
+        candidate_expansion: int = 2,
         model_path: str | Path | None = None,
+        unknown_word_resolver: UnknownWordResolver | None = None,
+        persist_unknown_words: UnknownWordPersistor | None = None,
+        auto_resolve_unknown_words: bool = True,
     ) -> None:
         self.model_path = Path(model_path) if model_path else None
+        self.unknown_word_resolver = unknown_word_resolver
+        self.persist_unknown_words = persist_unknown_words
+        self.auto_resolve_unknown_words = bool(auto_resolve_unknown_words)
+
         self.state: Dict[str, Any] = {
             "weights": dict(weights or {}),
             "randomness": float(randomness),
@@ -342,9 +420,9 @@ class ConvergenceModel:
             "token_drop_bias": {},
             "learning_meta": {
                 "episodes_seen": 0,
-                "last_avg_score": 50.0,
+                "last_avg_score": 0.5,
             },
-            "version": 3,
+            "version": 5,
         }
 
         if self.model_path and self.model_path.exists():
@@ -404,37 +482,82 @@ class ConvergenceModel:
             out.append(token)
         return out
 
+    def ensure_words_registered(self, words: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        if self.divergence_model is not None:
+            return self.divergence_model.ensure_words_registered(words)
+
+        if not self.auto_resolve_unknown_words or self.unknown_word_resolver is None:
+            return {}
+
+        added = self.primitive.resolve_unknown_words(words, resolver=self.unknown_word_resolver)
+        if added and self.persist_unknown_words is not None:
+            try:
+                self.persist_unknown_words(added)
+                print(f"[UNKNOWN][PERSIST] added={len(added)}", flush=True)
+            except Exception as e:
+                print(f"[UNKNOWN][PERSIST][ERROR] error={e}", flush=True)
+        return added
+
+    @staticmethod
+    def _clean_target_tokens(tokens: List[str]) -> List[str]:
+        return [str(t).strip() for t in tokens if str(t).strip() and str(t).strip() not in {"。", "、", "？", "！"}]
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return str(text or "").strip().replace(" ", "").replace("　", "")
+
+    @staticmethod
+    def _char_jaccard(a: str, b: str) -> float:
+        sa = set(ConvergenceModel._normalize_text(a))
+        sb = set(ConvergenceModel._normalize_text(b))
+        if not sa and not sb:
+            return 1.0
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / max(1, len(sa | sb))
+
+    @staticmethod
+    def _token_f1(predicted: List[str], target: List[str]) -> float:
+        pred_set = set(str(x).strip() for x in predicted if str(x).strip())
+        tgt_set = set(str(x).strip() for x in target if str(x).strip())
+        if not pred_set and not tgt_set:
+            return 1.0
+        if not pred_set or not tgt_set:
+            return 0.0
+        tp = len(pred_set & tgt_set)
+        if tp <= 0:
+            return 0.0
+        precision = tp / max(1, len(pred_set))
+        recall = tp / max(1, len(tgt_set))
+        if precision + recall <= 0:
+            return 0.0
+        return 2.0 * precision * recall / (precision + recall)
+
     def initial_converge(
         self,
         input_tokens: List[str],
         target_min: int = 3,
         target_max: int = 5,
     ) -> List[str]:
+        self.ensure_words_registered(input_tokens)
+
         tokens = self.flatten_unique(input_tokens)
         if not tokens:
             return []
 
-        token_keep_bias = self.state.get("token_keep_bias", {})
-        token_drop_bias = self.state.get("token_drop_bias", {})
-
         scored = []
         for token in tokens:
-            item = self.primitive.score_candidate(
-                token,
-                anchor_words=tokens,
-                candidate_counts=None,
-                token_keep_bias=token_keep_bias,
-                token_drop_bias=token_drop_bias,
-            )
-            score = float(item["final_score"])
-
             pos = self.primitive.pos_of(token)
+            priority = 0.0
             if pos in {"noun", "pronoun", "verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula"}:
-                score -= 0.20
-            if pos in {"particle", "particle_case", "particle_binding", "particle_sentence_final", "auxiliary"}:
-                score += 0.20
-
-            scored.append((score, token))
+                priority -= 0.65
+            elif pos in {"adverb", "interjection"}:
+                priority -= 0.30
+            elif pos in {"particle", "particle_case", "particle_binding", "particle_sentence_final", "auxiliary"}:
+                priority += 0.40
+            if token in {"？", "!", "！", "?", "。", "、"}:
+                priority += 0.50
+            scored.append((priority, token))
 
         scored.sort(key=lambda x: x[0])
         selected = [token for _, token in scored[:target_max]]
@@ -454,7 +577,11 @@ class ConvergenceModel:
         original_input: List[str],
         initial_core: List[str],
         top_n: int = 8,
+        target_tokens: List[str] | None = None,
+        target_text: str = "",
     ) -> List[str]:
+        self.ensure_words_registered(candidate_tokens + original_input + initial_core + list(target_tokens or []))
+
         candidate_tokens = self.flatten_unique(candidate_tokens)
         if not candidate_tokens:
             return self.flatten_unique(initial_core[:top_n])
@@ -462,6 +589,8 @@ class ConvergenceModel:
         candidate_counts: Dict[str, int] = {}
         for token in candidate_tokens:
             candidate_counts[token] = candidate_counts.get(token, 0) + 1
+
+        desired_tokens = self._clean_target_tokens(target_tokens or [])
 
         result = self.primitive.converge(
             input_words=original_input,
@@ -471,8 +600,15 @@ class ConvergenceModel:
             anchor_words=self.flatten_unique(initial_core or original_input),
             token_keep_bias=self.state.get("token_keep_bias", {}),
             token_drop_bias=self.state.get("token_drop_bias", {}),
+            desired_tokens=desired_tokens,
+            desired_text=target_text,
         )
         selected = list(result.get("selected_words", []))
+
+        if desired_tokens:
+            for token in desired_tokens:
+                if token in candidate_tokens and token not in selected:
+                    selected.insert(0, token)
 
         if not selected:
             selected = self.flatten_unique(initial_core[:top_n] or original_input[:top_n])
@@ -482,14 +618,14 @@ class ConvergenceModel:
             for t in selected
         )
         if not has_predicate:
-            for token in candidate_tokens + original_input:
+            for token in candidate_tokens + original_input + desired_tokens:
                 if self.primitive.pos_of(token) in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula"} and token not in selected:
                     selected.append(token)
                     break
 
         has_nominal = any(self.primitive.pos_of(t) in {"noun", "pronoun"} for t in selected)
         if not has_nominal:
-            for token in candidate_tokens + original_input:
+            for token in candidate_tokens + original_input + desired_tokens:
                 if self.primitive.pos_of(token) in {"noun", "pronoun"} and token not in selected:
                     selected.insert(0, token)
                     break
@@ -499,66 +635,51 @@ class ConvergenceModel:
     def _safe_score(self, ep: Dict[str, Any]) -> float:
         evaluation = ep.get("evaluation") or {}
         try:
-            return float(evaluation.get("score_total", 50.0))
+            score = float(evaluation.get("score_total", 0.0))
         except Exception:
-            return 50.0
+            score = 0.0
+        return max(0.0, min(1.0, score))
 
-    def _token_retention_weight(self, token: str) -> float:
-        token = str(token)
+    def _teacher_metrics(self, ep: Dict[str, Any]) -> Dict[str, float]:
+        target_tokens = self._clean_target_tokens(list(ep.get("target_tokens", [])))
+        target_text = str(ep.get("target_text", "")).strip()
 
-        if token in {"。", "、", ",", ".", "!", "！", "?", "？"}:
-            return 0.10
-
-        pos = self.primitive.pos_of(token)
-        if pos in {"particle", "particle_case", "particle_binding", "particle_conjunctive", "particle_sentence_final", "auxiliary"}:
-            return 0.20
-        if pos in {"noun", "pronoun"}:
-            return 1.00
-        if pos in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula"}:
-            return 1.10
-        if len(token) == 1:
-            return 0.50
-        return 0.85
-
-    def _weighted_overlap_ratio(self, base_tokens: List[str], kept_tokens: List[str]) -> float:
-        base_unique = self.flatten_unique([str(t) for t in base_tokens if str(t)])
-        if not base_unique:
-            return 0.0
-
-        kept_set = set(str(t) for t in kept_tokens if str(t))
-        total_weight = 0.0
-        kept_weight = 0.0
-
-        for token in base_unique:
-            w = self._token_retention_weight(token)
-            total_weight += w
-            if token in kept_set:
-                kept_weight += w
-
-        if total_weight <= 1e-9:
-            return 0.0
-        return kept_weight / total_weight
-
-    def _compute_retention_metrics(self, ep: Dict[str, Any]) -> Dict[str, float]:
-        input_tokens = self.flatten_unique([str(t) for t in ep.get("input_tokens", []) if str(t)])
         mid_converged = self.flatten_unique([str(t) for t in ep.get("mid_converged", []) if str(t)])
         final_expanded = self.flatten_unique([str(t) for t in ep.get("final_expanded", []) if str(t) and str(t) != "。"])
+        response_text = str(ep.get("response_text", "")).strip()
 
-        retention_mid = self._weighted_overlap_ratio(input_tokens, mid_converged)
-        retention_final = self._weighted_overlap_ratio(input_tokens, final_expanded)
+        token_f1 = 0.0
+        if target_tokens:
+            token_f1 = max(
+                self._token_f1(mid_converged, target_tokens),
+                self._token_f1(final_expanded, target_tokens),
+            )
 
-        retention_reward = (0.10 * retention_mid) + (0.15 * retention_final)
+        text_sim = self._char_jaccard(response_text, target_text) if target_text else 0.0
 
         return {
-            "retention_mid": round(retention_mid, 6),
-            "retention_final": round(retention_final, 6),
-            "retention_reward": round(retention_reward, 6),
+            "token_f1": round(token_f1, 6),
+            "text_sim": round(text_sim, 6),
         }
 
     def update_from_episodes(self, episodes: List[Dict[str, Any]]) -> None:
         if not episodes:
             print("[CONVERGENCE][UPDATE] skip: no episodes", flush=True)
             return
+
+        words_to_check: List[str] = []
+        for ep in episodes:
+            words_to_check.extend(ep.get("input_tokens", []))
+            words_to_check.extend(ep.get("initial_core", []))
+            words_to_check.extend(ep.get("mid_converged", []))
+            words_to_check.extend(ep.get("final_expanded", []))
+            words_to_check.extend(ep.get("target_tokens", []))
+            for step in ep.get("divergence_steps", []):
+                for expanded in step.get("expanded", []):
+                    for child in expanded.get("children", []):
+                        if child:
+                            words_to_check.append(str(child))
+        self.ensure_words_registered(words_to_check)
 
         token_keep_bias = dict(self.state.get("token_keep_bias", {}))
         token_drop_bias = dict(self.state.get("token_drop_bias", {}))
@@ -570,29 +691,28 @@ class ConvergenceModel:
         print(f"[CONVERGENCE][UPDATE] start episodes={len(episodes)}", flush=True)
 
         for idx, ep in enumerate(episodes, start=1):
-            total_score = self._safe_score(ep)
-            total_score_sum += total_score
+            score_total = self._safe_score(ep)
+            teacher = self._teacher_metrics(ep)
+            token_f1 = float(teacher["token_f1"])
+            text_sim = float(teacher["text_sim"])
+
+            combined = (0.65 * token_f1) + (0.20 * text_sim) + (0.15 * score_total)
+            centered = (combined * 2.0) - 1.0
+            reward = centered if centered >= 0.0 else centered * 0.45
+
+            total_score_sum += combined
             episode_count += 1
 
-            centered = (total_score - 50.0) / 50.0
-            if centered >= 0:
-                reward = centered
-            else:
-                reward = centered * 0.40
-
-            retention = self._compute_retention_metrics(ep)
-            reward_with_retention = reward + float(retention["retention_reward"])
-
-            input_tokens = set(ep.get("input_tokens", []))
-            initial_core = set(ep.get("initial_core", []))
-            mid_converged = set(ep.get("mid_converged", []))
-            final_expanded = set(ep.get("final_expanded", []))
-            response_tokens = {t for t in final_expanded if t != "。"}
+            input_tokens = set(self.flatten_unique(list(ep.get("input_tokens", []))))
+            target_tokens = set(self._clean_target_tokens(list(ep.get("target_tokens", []))))
+            initial_core = set(self.flatten_unique(list(ep.get("initial_core", []))))
+            mid_converged = set(self.flatten_unique(list(ep.get("mid_converged", []))))
+            final_expanded = set(self.flatten_unique([t for t in ep.get("final_expanded", []) if str(t) != "。"]))
 
             kept_tokens = set()
             kept_tokens |= initial_core
             kept_tokens |= mid_converged
-            kept_tokens |= response_tokens
+            kept_tokens |= final_expanded
 
             candidate_like = set()
             for step in ep.get("divergence_steps", []):
@@ -601,63 +721,53 @@ class ConvergenceModel:
                         if child:
                             candidate_like.add(str(child))
 
-            dropped_tokens = candidate_like - kept_tokens - input_tokens
+            desired_kept = {t for t in kept_tokens if t in target_tokens}
+            noisy_kept = {t for t in kept_tokens if t not in target_tokens and t not in input_tokens}
+            desired_dropped = {t for t in target_tokens if t not in kept_tokens}
+            dropped_noise = {t for t in candidate_like if t not in kept_tokens and t not in target_tokens}
 
             print(
                 f"[CONVERGENCE][EP {idx}] episode_id={ep.get('episode_id')} "
-                f"score_total={total_score:.6f} centered={centered:+.6f} "
-                f"reward={reward:+.6f} retention_mid={float(retention['retention_mid']):.6f} "
-                f"retention_final={float(retention['retention_final']):.6f} "
-                f"retention_reward={float(retention['retention_reward']):+.6f} "
-                f"reward_total={reward_with_retention:+.6f} "
-                f"kept={len(kept_tokens)} dropped={len(dropped_tokens)}",
+                f"score_total={score_total:.6f} token_f1={token_f1:.6f} text_sim={text_sim:.6f} "
+                f"combined={combined:.6f} reward={reward:+.6f} "
+                f"desired_kept={len(desired_kept)} noisy_kept={len(noisy_kept)} desired_dropped={len(desired_dropped)}",
                 flush=True,
             )
 
             keep_logs: List[tuple[str, float, float, float]] = []
-            for token in kept_tokens:
-                pos = self.primitive.pos_of(token)
-                pos_scale = 1.0
-                if pos in {"verb", "verb_stem", "adjective_i", "adjective_na", "adjective_stem", "copula", "noun", "pronoun"}:
-                    pos_scale = 1.15
-                elif pos in {"particle", "particle_case", "particle_binding", "auxiliary", "particle_sentence_final"}:
-                    pos_scale = 0.75
 
+            for token in desired_kept:
                 current = float(token_keep_bias.get(token, 0.0))
-                new_value = round(
-                    max(-3.0, min(3.0, current + reward_with_retention * 0.18 * pos_scale)),
-                    6,
-                )
+                delta = 0.26 * max(0.0, reward) + 0.16
+                new_value = round(max(-4.0, min(4.0, current + delta)), 6)
                 token_keep_bias[token] = new_value
                 keep_logs.append((token, current, new_value, new_value - current))
+
+            for token in desired_dropped:
+                current_keep = float(token_keep_bias.get(token, 0.0))
+                new_keep = round(max(-4.0, min(4.0, current_keep + 0.22)), 6)
+                token_keep_bias[token] = new_keep
+                keep_logs.append((token, current_keep, new_keep, new_keep - current_keep))
+
+                current_drop = float(token_drop_bias.get(token, 0.0))
+                new_drop = round(max(-4.0, min(4.0, current_drop - 0.18)), 6)
+                token_drop_bias[token] = new_drop
+
+            for token in noisy_kept:
+                current = float(token_drop_bias.get(token, 0.0))
+                delta = (0.22 * max(0.0, -reward)) + 0.12
+                new_value = round(max(-4.0, min(4.0, current + delta)), 6)
+                token_drop_bias[token] = new_value
+
+            for token in dropped_noise:
+                current = float(token_drop_bias.get(token, 0.0))
+                new_value = round(max(-4.0, min(4.0, current + 0.04)), 6)
+                token_drop_bias[token] = new_value
 
             keep_logs.sort(key=lambda x: abs(x[3]), reverse=True)
             for token, before, after, delta in keep_logs[:12]:
                 print(
                     f"  [CONVERGENCE][KEEP] {token}: {before:.6f} -> {after:.6f} (delta={delta:+.6f})",
-                    flush=True,
-                )
-
-            drop_logs: List[tuple[str, float, float, float]] = []
-            for token in dropped_tokens:
-                pos = self.primitive.pos_of(token)
-                pos_scale = 1.0
-                if pos in {"particle", "particle_case", "particle_binding", "auxiliary", "particle_sentence_final"}:
-                    pos_scale = 0.65
-
-                current = float(token_drop_bias.get(token, 0.0))
-                drop_delta = reward_with_retention * 0.12 * pos_scale
-                new_value = round(
-                    max(-3.0, min(3.0, current + drop_delta)),
-                    6,
-                )
-                token_drop_bias[token] = new_value
-                drop_logs.append((token, current, new_value, new_value - current))
-
-            drop_logs.sort(key=lambda x: abs(x[3]), reverse=True)
-            for token, before, after, delta in drop_logs[:12]:
-                print(
-                    f"  [CONVERGENCE][DROP] {token}: {before:.6f} -> {after:.6f} (delta={delta:+.6f})",
                     flush=True,
                 )
 
