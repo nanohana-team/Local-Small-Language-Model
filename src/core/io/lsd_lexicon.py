@@ -347,7 +347,9 @@ def build_hierarchical_container_from_entries(
 
         node = container
         for segment in path:
-            node = node[segment]
+            if not isinstance(node, dict):
+                raise TypeError(f"Hierarchy node is not a dict while inserting {word!r}: {segment!r}")
+            node = node.setdefault(segment, {})
         entry_copy = dict(entry)
         entry_copy["hierarchy"] = path[1:]
         node[word] = entry_copy

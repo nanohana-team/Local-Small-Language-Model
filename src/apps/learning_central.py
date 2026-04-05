@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 from src.core.primitive.divergence import DivergenceModel
 from src.core.primitive.convergence import ConvergenceModel
 from src.llm.evaluator_gemini import GeminiEvaluator
-from src.llm.input_generator_gemini import GeminiInputGenerator
 from src.utils.storage import StorageManager
 from src.utils.trainer import Trainer
 
@@ -22,7 +21,7 @@ class LearningCentral:
         storage: StorageManager,
         trainer: Trainer,
         verbose: bool = False,
-        input_generator: GeminiInputGenerator | None = None,
+        input_generator: Any | None = None,
     ) -> None:
         self.divergence_model = divergence_model
         self.convergence_model = convergence_model
@@ -55,6 +54,32 @@ class LearningCentral:
         except Exception:
             return None
 
+    @staticmethod
+    def _clean_tokens(values: Any) -> List[str]:
+        if not isinstance(values, list):
+            return []
+        return [str(x).strip() for x in values if str(x).strip()]
+
+    @staticmethod
+    def _normalize_generated_pair(row: Any) -> Dict[str, Any]:
+        if isinstance(row, dict):
+            return {
+                "input_tokens": LearningCentral._clean_tokens(row.get("input_tokens", [])),
+                "target_tokens": LearningCentral._clean_tokens(row.get("target_tokens", [])),
+                "target_text": str(row.get("target_text", "")).strip(),
+            }
+        if isinstance(row, list):
+            return {
+                "input_tokens": LearningCentral._clean_tokens(row),
+                "target_tokens": [],
+                "target_text": "",
+            }
+        return {
+            "input_tokens": [],
+            "target_tokens": [],
+            "target_text": "",
+        }
+
     def build_response_text(self, final_tokens: List[str]) -> str:
         if not final_tokens:
             return "……"
@@ -83,13 +108,20 @@ class LearningCentral:
         input_tokens: List[str],
         depth: int,
         evaluate: bool = True,
+        target_tokens: Optional[List[str]] = None,
+        target_text: str = "",
     ) -> Dict[str, Any]:
         started_at = time.time()
         episode_id = f"ep_{uuid.uuid4().hex[:12]}"
 
+        target_tokens = [str(x).strip() for x in (target_tokens or []) if str(x).strip()]
+        target_text = str(target_text or "").strip()
+
         episode: Dict[str, Any] = {
             "episode_id": episode_id,
             "input_tokens": list(input_tokens),
+            "target_tokens": list(target_tokens),
+            "target_text": target_text,
             "depth": int(depth),
             "timestamps": {
                 "started_at_unix": started_at,
@@ -112,6 +144,12 @@ class LearningCentral:
             f"[EPISODE] INPUT count={len(input_tokens)} tokens={self._preview_tokens(input_tokens, 40)}",
             force=True,
         )
+        if target_tokens or target_text:
+            self._log(
+                f"[EPISODE] TARGET tokens={self._preview_tokens(target_tokens, 40)} "
+                f"text={json.dumps(target_text, ensure_ascii=False)}",
+                force=True,
+            )
 
         initial_core = self.convergence_model.initial_converge(
             input_tokens=input_tokens,
@@ -185,7 +223,13 @@ class LearningCentral:
 
         if evaluate:
             self._log("[STEP][EVALUATION] start", force=True)
-            evaluation = self.evaluator.evaluate_episode(episode)
+            evaluation = self.evaluator.evaluate_episode(
+                {
+                    **episode,
+                    "target_tokens": target_tokens,
+                    "target_text": target_text,
+                }
+            )
             episode["evaluation"] = evaluation
             self._log(
                 f"[STEP][EVALUATION] done payload={json.dumps(evaluation, ensure_ascii=False)}",
@@ -197,6 +241,7 @@ class LearningCentral:
         episode["metrics"] = {
             "elapsed_sec": round(ended_at - started_at, 6),
             "input_token_count": len(input_tokens),
+            "target_token_count": len(target_tokens),
             "initial_core_count": len(initial_core),
             "mid_converged_count": len(mid_converged),
             "final_expanded_count": len(final_expanded),
@@ -214,14 +259,20 @@ class LearningCentral:
         self,
         input_tokens: List[str],
         depth: int,
+        target_tokens: Optional[List[str]] = None,
+        target_text: str = "",
     ) -> Dict[str, Any]:
         episode = self.run_episode(
             input_tokens=input_tokens,
             depth=depth,
             evaluate=False,
+            target_tokens=target_tokens,
+            target_text=target_text,
         )
         return {
             "input_tokens": episode["input_tokens"],
+            "target_tokens": episode.get("target_tokens", []),
+            "target_text": episode.get("target_text", ""),
             "initial_core": episode["initial_core"],
             "mid_converged": episode["mid_converged"],
             "final_expanded": episode["final_expanded"],
@@ -321,39 +372,56 @@ class LearningCentral:
 
     def run_learning_loop(
         self,
-        dataset: Optional[List[List[str]]],
+        dataset: Optional[List[Dict[str, Any]]],
         depth: int,
         update_interval: int,
         max_episodes: Optional[int] = None,
-        auto_input: bool = False,
+        auto_teacher: bool = False,
     ) -> None:
         buffer: List[Dict[str, Any]] = []
 
         self._log(
-            f"[LEARNING] loop start auto_input={auto_input} depth={depth} "
+            f"[LEARNING] loop start auto_teacher={auto_teacher} depth={depth} "
             f"update_interval={update_interval} max_episodes={max_episodes}",
             force=True,
         )
 
-        if auto_input:
+        if auto_teacher:
             if max_episodes is None:
                 max_episodes = 100
 
             for idx in range(1, max_episodes + 1):
                 if self.input_generator is None:
-                    raise RuntimeError("auto_input=True but input_generator is not set")
+                    raise RuntimeError("auto_teacher=True but input_generator is not set")
 
-                input_tokens = self.input_generator.generate()
+                pair = self._normalize_generated_pair(self.input_generator.generate())
+                input_tokens = pair["input_tokens"]
+                target_tokens = pair["target_tokens"]
+                target_text = pair["target_text"]
+
+                if not input_tokens:
+                    self._log(f"[LEARNING] skip empty generated pair at episode {idx}", force=True)
+                    continue
+
                 self._log(
                     f"[LEARNING] episode {idx}/{max_episodes} generated_input="
                     f"{self._preview_tokens(input_tokens, 40)}",
                     force=True,
                 )
+                if target_tokens or target_text:
+                    self._log(
+                        f"[LEARNING] episode {idx}/{max_episodes} generated_target="
+                        f"tokens={self._preview_tokens(target_tokens, 40)} "
+                        f"text={json.dumps(target_text, ensure_ascii=False)}",
+                        force=True,
+                    )
 
                 episode = self.run_episode(
                     input_tokens=input_tokens,
                     depth=depth,
                     evaluate=True,
+                    target_tokens=target_tokens,
+                    target_text=target_text,
                 )
                 self.storage.save_episode(episode)
                 buffer.append(episode)
@@ -380,7 +448,16 @@ class LearningCentral:
         dataset = dataset or []
         total = min(len(dataset), max_episodes) if max_episodes is not None else len(dataset)
 
-        for idx, input_tokens in enumerate(dataset[:total], start=1):
+        for idx, row in enumerate(dataset[:total], start=1):
+            if isinstance(row, dict):
+                input_tokens = [str(x).strip() for x in row.get("input_tokens", []) if str(x).strip()]
+                target_tokens = [str(x).strip() for x in row.get("target_tokens", []) if str(x).strip()]
+                target_text = str(row.get("target_text", "")).strip()
+            else:
+                input_tokens = list(row)
+                target_tokens = []
+                target_text = ""
+
             self._log(
                 f"[LEARNING] episode {idx}/{total} input={self._preview_tokens(input_tokens, 40)}",
                 force=True,
@@ -390,6 +467,8 @@ class LearningCentral:
                 input_tokens=input_tokens,
                 depth=depth,
                 evaluate=True,
+                target_tokens=target_tokens,
+                target_text=target_text,
             )
             self.storage.save_episode(episode)
             buffer.append(episode)

@@ -10,7 +10,7 @@ from src.apps.chat_control import ChatController
 from src.core.primitive.convergence import ConvergenceModel
 from src.core.primitive.divergence import DivergenceModel, DivergencePrimitive
 from src.llm.evaluator_gemini import GeminiEvaluator
-from src.llm.input_generator_gemini import GeminiInputGenerator
+from src.llm.input_output_generator_gemini import GeminiTeacherPairGenerator
 from src.utils.trainer import Trainer
 from src.utils.verbal import (
     generate_candidates,
@@ -27,6 +27,11 @@ class ChatLearningCentral:
     - trainer に反復思考をさせる
     - verbal 候補を評価して best_text を決める
     - 結果を保存する
+
+    追加:
+    - 教師あり学習用に target_tokens / target_text を受け取れる
+    - 候補文評価でも教師を優先できる
+    - auto_teacher 用に input/target ペアを自動生成できる
     """
 
     def __init__(
@@ -34,7 +39,7 @@ class ChatLearningCentral:
         chat_controller: ChatController,
         trainer: Trainer,
         evaluator: Optional[Any] = None,
-        input_generator: Optional[GeminiInputGenerator] = None,
+        teacher_generator: Optional[Any] = None,
         verbose: bool = False,
         save_path: str = "runtime/logs/chat_learning.jsonl",
         verbal_model_path: str = "runtime/models/verbal_model.json",
@@ -42,7 +47,7 @@ class ChatLearningCentral:
         self.chat_controller = chat_controller
         self.trainer = trainer
         self.evaluator = evaluator
-        self.input_generator = input_generator
+        self.teacher_generator = teacher_generator
         self.verbose = verbose
         self.save_path = Path(save_path)
         self.save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,19 +65,62 @@ class ChatLearningCentral:
         suffix = "" if len(tokens) <= limit else f" ... (+{len(tokens) - limit})"
         return json.dumps(shown, ensure_ascii=False) + suffix
 
-    def generate_input_tokens(self) -> List[str]:
-        if self.input_generator is None:
-            raise RuntimeError("input_generator is not set")
-        tokens = self.input_generator.generate()
-        return [str(x).strip() for x in tokens if str(x).strip()]
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        s = str(text or "").strip()
+        return s.replace(" ", "").replace("　", "")
 
-    def run_once(self, input_tokens: Sequence[str], depth: int = 4) -> Dict[str, Any]:
+    @staticmethod
+    def _char_jaccard(a: str, b: str) -> float:
+        sa = set(ChatLearningCentral._normalize_text(a))
+        sb = set(ChatLearningCentral._normalize_text(b))
+        if not sa and not sb:
+            return 1.0
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / max(1, len(sa | sb))
+
+    @staticmethod
+    def _normalize_generated_pair(row: Any) -> Dict[str, Any]:
+        if isinstance(row, dict):
+            return {
+                "input_tokens": [str(x).strip() for x in row.get("input_tokens", []) if str(x).strip()],
+                "target_tokens": [str(x).strip() for x in row.get("target_tokens", []) if str(x).strip()],
+                "target_text": str(row.get("target_text", "")).strip(),
+            }
+        if isinstance(row, list):
+            return {
+                "input_tokens": [str(x).strip() for x in row if str(x).strip()],
+                "target_tokens": [],
+                "target_text": "",
+            }
+        return {
+            "input_tokens": [],
+            "target_tokens": [],
+            "target_text": "",
+        }
+
+    def generate_teacher_pair(self) -> Dict[str, Any]:
+        if self.teacher_generator is None:
+            raise RuntimeError("teacher_generator is not set")
+        return self._normalize_generated_pair(self.teacher_generator.generate())
+
+    def run_once(
+        self,
+        input_tokens: Sequence[str],
+        depth: int = 4,
+        target_tokens: Optional[Sequence[str]] = None,
+        target_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
         started = time.time()
         episode_id = f"chat_ep_{uuid.uuid4().hex[:12]}"
 
         input_tokens = [str(x).strip() for x in input_tokens if str(x).strip()]
         if not input_tokens:
             raise ValueError("input_tokens is empty")
+
+        target_tokens_clean = [str(x).strip() for x in (target_tokens or []) if str(x).strip()]
+        target_text_clean = str(target_text).strip() if target_text is not None else ""
 
         self._log("=" * 88, force=True)
         self._log(f"[CHAT_CENTRAL] START id={episode_id} depth={depth}", force=True)
@@ -81,12 +129,29 @@ class ChatLearningCentral:
             force=True,
         )
 
-        recursive_episode = self.trainer.run_recursive_episode(
-            input_tokens=input_tokens,
-            chat_controller=self.chat_controller,
-            evaluator=self.evaluator,
-            depth=depth,
-        )
+        if target_tokens_clean or target_text_clean:
+            self._log(
+                f"[CHAT_CENTRAL] TARGET tokens={self._preview_tokens(target_tokens_clean, 40)} "
+                f"text={json.dumps(target_text_clean, ensure_ascii=False)}",
+                force=True,
+            )
+
+        if target_tokens_clean or target_text_clean:
+            recursive_episode = self.trainer.run_supervised_recursive_episode(
+                input_tokens=input_tokens,
+                chat_controller=self.chat_controller,
+                evaluator=self.evaluator,
+                depth=depth,
+                target_tokens=target_tokens_clean,
+                target_text=target_text_clean,
+            )
+        else:
+            recursive_episode = self.trainer.run_recursive_episode(
+                input_tokens=input_tokens,
+                chat_controller=self.chat_controller,
+                evaluator=self.evaluator,
+                depth=depth,
+            )
 
         final_output_tokens = list(recursive_episode.get("final_output_tokens", []))
         self._log(
@@ -111,6 +176,8 @@ class ChatLearningCentral:
             input_tokens=list(input_tokens),
             final_tokens=final_output_tokens,
             candidates=candidates,
+            target_tokens=target_tokens_clean,
+            target_text=target_text_clean,
         )
 
         best_text = str(evaluation.get("best_text", candidates[0] if candidates else "……"))
@@ -131,6 +198,8 @@ class ChatLearningCentral:
         result = {
             "episode_id": episode_id,
             "input_tokens": list(input_tokens),
+            "target_tokens": list(target_tokens_clean),
+            "target_text": target_text_clean,
             "recursive_episode": recursive_episode,
             "final_output_tokens": final_output_tokens,
             "candidates": list(candidates),
@@ -145,8 +214,13 @@ class ChatLearningCentral:
                 "elapsed_sec": round(ended - started, 6),
                 "candidate_count": len(candidates),
                 "input_token_count": len(input_tokens),
+                "target_token_count": len(target_tokens_clean),
                 "final_output_count": len(final_output_tokens),
                 "recursive_step_count": int(recursive_episode.get("recursive_step_count", 0)),
+                "best_text_target_char_jaccard": round(
+                    self._char_jaccard(best_text, target_text_clean) if target_text_clean else 0.0,
+                    6,
+                ),
             },
         }
 
@@ -163,7 +237,12 @@ class ChatLearningCentral:
         input_tokens: List[str],
         final_tokens: List[str],
         candidates: List[str],
+        target_tokens: Optional[List[str]] = None,
+        target_text: str = "",
     ) -> Dict[str, Any]:
+        target_tokens = [str(x).strip() for x in (target_tokens or []) if str(x).strip()]
+        target_text = str(target_text or "").strip()
+
         if not candidates:
             return {
                 "best_text": "",
@@ -178,6 +257,8 @@ class ChatLearningCentral:
                     input_tokens=input_tokens,
                     final_tokens=final_tokens,
                     candidates=candidates,
+                    target_tokens=target_tokens,
+                    target_text=target_text,
                 )
                 if isinstance(result, dict):
                     best_text = str(result.get("best_text", candidates[0]))
@@ -197,8 +278,41 @@ class ChatLearningCentral:
             original_input=input_tokens,
             model=model,
         )
-        local_scores.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
 
+        if target_tokens or target_text:
+            rescored: List[Dict[str, Any]] = []
+            target_set = set(target_tokens)
+
+            for row in local_scores:
+                text = str(row.get("text", ""))
+                base_score = float(row.get("score", 0.0))
+
+                token_bonus = 0.0
+                if target_set:
+                    text_hit = sum(1 for tok in target_set if tok and tok in text)
+                    token_bonus += text_hit * 2.2
+
+                char_bonus = self._char_jaccard(text, target_text) * 4.0 if target_text else 0.0
+
+                total = base_score + token_bonus + char_bonus
+                rescored.append(
+                    {
+                        "text": text,
+                        "score": round(total, 6),
+                        "base_score": round(base_score, 6),
+                        "target_token_bonus": round(token_bonus, 6),
+                        "target_text_bonus": round(char_bonus, 6),
+                    }
+                )
+
+            rescored.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+            return {
+                "best_text": rescored[0]["text"] if rescored else candidates[0],
+                "scores": rescored,
+                "reason": "local_target_priority",
+            }
+
+        local_scores.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
         return {
             "best_text": local_scores[0]["text"] if local_scores else candidates[0],
             "scores": local_scores,
@@ -258,16 +372,17 @@ def build_chat_learning_central(args: Any) -> ChatLearningCentral:
         verbose=args.verbose,
     )
 
-    input_generator = GeminiInputGenerator(
-        model_name=args.input_generator_model,
-        enabled=args.auto_input,
+    teacher_generator = GeminiTeacherPairGenerator(
+        model_name=getattr(args, "teacher_generator_model", None) or "gemini-2.5-flash-lite",
+        enabled=bool(getattr(args, "auto_teacher", False)),
+        verbose=bool(getattr(args, "verbose", False)),
     )
 
     return ChatLearningCentral(
         chat_controller=controller,
         trainer=trainer,
         evaluator=evaluator,
-        input_generator=input_generator,
+        teacher_generator=teacher_generator,
         verbose=args.verbose,
         save_path=args.save_path,
         verbal_model_path=args.verbal_model_path,

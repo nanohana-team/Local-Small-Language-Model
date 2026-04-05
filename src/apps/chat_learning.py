@@ -1,44 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from src.apps.chat_learning_central import (
     ChatLearningCentral,
     build_chat_learning_central,
 )
-
-
-def load_dotenv_file(dotenv_path: str | Path = ".env", override: bool = False) -> None:
-    path = Path(dotenv_path)
-    if not path.exists():
-        return
-
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        text = path.read_text(encoding="utf-8-sig")
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-
-        if not key:
-            continue
-
-        if value and len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-
-        if override or key not in os.environ:
-            os.environ[key] = value
+from src.utils.logging import (
+    load_dotenv_file,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,15 +32,33 @@ def parse_args() -> argparse.Namespace:
         help="Tokenized input for fixed-input learning.",
     )
     parser.add_argument(
-        "--auto-input",
-        action="store_true",
-        help="Generate input sentences automatically using Gemini.",
+        "--target-text",
+        type=str,
+        default="",
+        help="Teacher target surface text.",
     )
     parser.add_argument(
-        "--input-generator-model",
+        "--target-words",
+        nargs="*",
+        default=None,
+        help="Teacher target tokens.",
+    )
+    parser.add_argument(
+        "--input-file",
+        type=str,
+        default="",
+        help="Optional JSON/JSONL file for fixed supervised episodes.",
+    )
+    parser.add_argument(
+        "--auto-teacher",
+        action="store_true",
+        help="Generate input/target pairs automatically using Gemini.",
+    )
+    parser.add_argument(
+        "--teacher-generator-model",
         type=str,
         default="gemini-2.5-flash-lite",
-        help="Gemini model for automatic input generation.",
+        help="Gemini model for automatic teacher pair generation.",
     )
     parser.add_argument(
         "--lexicon",
@@ -123,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--accept-score-threshold",
         type=float,
-        default=8.5,
+        default=0.85,
         help="Accept threshold for recursive evaluation.",
     )
     parser.add_argument(
@@ -169,12 +162,119 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _clean_tokens(values: Any) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(x).strip() for x in values if str(x).strip()]
+
+
 def resolve_fixed_input_tokens(args: argparse.Namespace) -> List[str]:
     if args.words:
         return [str(x).strip() for x in args.words if str(x).strip()]
     if args.text.strip():
         return [x for x in args.text.strip().split() if x.strip()]
     return []
+
+
+def resolve_fixed_target_tokens(args: argparse.Namespace) -> List[str]:
+    if args.target_words:
+        return [str(x).strip() for x in args.target_words if str(x).strip()]
+    return []
+
+
+def _normalize_episode_row(row: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(row, list):
+        input_tokens = _clean_tokens(row)
+        if not input_tokens:
+            return None
+        return {
+            "input_tokens": input_tokens,
+            "target_tokens": [],
+            "target_text": "",
+        }
+
+    if not isinstance(row, dict):
+        return None
+
+    input_tokens: List[str] = []
+    target_tokens: List[str] = []
+    target_text = ""
+
+    if "input_tokens" in row:
+        input_tokens = _clean_tokens(row.get("input_tokens"))
+    elif "tokens" in row:
+        input_tokens = _clean_tokens(row.get("tokens"))
+    elif isinstance(row.get("input_text"), str):
+        input_tokens = [x for x in str(row["input_text"]).strip().split() if x.strip()]
+    elif isinstance(row.get("text"), str):
+        input_tokens = [x for x in str(row["text"]).strip().split() if x.strip()]
+
+    if "target_tokens" in row:
+        target_tokens = _clean_tokens(row.get("target_tokens"))
+
+    if isinstance(row.get("target_text"), str):
+        target_text = str(row.get("target_text", "")).strip()
+
+    if not input_tokens:
+        return None
+
+    return {
+        "input_tokens": input_tokens,
+        "target_tokens": target_tokens,
+        "target_text": target_text,
+    }
+
+
+def read_episode_rows(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(f"input file not found: {path}")
+
+    rows: List[Dict[str, Any]] = []
+    suffix = path.suffix.lower()
+
+    if suffix == ".jsonl":
+        with path.open("r", encoding="utf-8") as f:
+            for line_no, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception as exc:
+                    print(f"[WARN] failed to parse jsonl line={line_no}: {exc}", flush=True)
+                    continue
+
+                normalized = _normalize_episode_row(row)
+                if normalized is not None:
+                    rows.append(normalized)
+
+    elif suffix == ".json":
+        with path.open("r", encoding="utf-8") as f:
+            obj = json.load(f)
+
+        if isinstance(obj, list):
+            for idx, row in enumerate(obj, start=1):
+                normalized = _normalize_episode_row(row)
+                if normalized is not None:
+                    rows.append(normalized)
+                else:
+                    print(f"[WARN] skipped invalid json row index={idx}", flush=True)
+
+    else:
+        with path.open("r", encoding="utf-8") as f:
+            for line_no, line in enumerate(f, start=1):
+                tokens = [x for x in line.strip().split() if x.strip()]
+                if not tokens:
+                    continue
+                rows.append(
+                    {
+                        "input_tokens": tokens,
+                        "target_tokens": [],
+                        "target_text": "",
+                    }
+                )
+
+    return rows
 
 
 def main() -> None:
@@ -188,29 +288,73 @@ def main() -> None:
     has_gemini = bool(os.getenv("GEMINI_API_KEY", "").strip())
     print(f"[ENV] GEMINI_API_KEY={'set' if has_gemini else 'missing'}", flush=True)
 
-    if not args.auto_input:
-        fixed_tokens = resolve_fixed_input_tokens(args)
-        if not fixed_tokens:
-            raise SystemExit("[ERROR] chat_learning requires --text or --words unless --auto-input is used")
-
     central = build_chat_learning_central(args)
 
+    fixed_rows: List[Dict[str, Any]] = []
+    if args.input_file.strip():
+        fixed_rows = read_episode_rows(Path(args.input_file))
+        if not fixed_rows:
+            raise SystemExit("[ERROR] input_file was provided but no valid episodes were found")
+        print(f"[CHAT_INPUT] loaded dataset rows={len(fixed_rows)} from {args.input_file}", flush=True)
+
+    elif not args.auto_teacher:
+        fixed_tokens = resolve_fixed_input_tokens(args)
+        fixed_target_tokens = resolve_fixed_target_tokens(args)
+        fixed_target_text = str(args.target_text or "").strip()
+
+        if not fixed_tokens:
+            raise SystemExit(
+                "[ERROR] chat_learning requires --text or --words unless --auto-teacher is used"
+            )
+
+        fixed_rows = [
+            {
+                "input_tokens": fixed_tokens,
+                "target_tokens": fixed_target_tokens,
+                "target_text": fixed_target_text,
+            }
+        ]
+
     episode = 0
+    dataset_index = 0
+
     try:
         while True:
             episode += 1
             print(f"[CHAT_INPUT] LOOP episode={episode}", flush=True)
 
-            if args.auto_input:
-                episode_tokens = central.generate_input_tokens()
-                print(f"[CHAT_INPUT] AUTO_INPUT tokens={episode_tokens}", flush=True)
+            if args.auto_teacher:
+                pair = central.generate_teacher_pair()
+                episode_tokens = [str(x).strip() for x in pair.get("input_tokens", []) if str(x).strip()]
+                target_tokens = [str(x).strip() for x in pair.get("target_tokens", []) if str(x).strip()]
+                target_text = str(pair.get("target_text", "")).strip()
+
+                print(
+                    f"[CHAT_INPUT] AUTO_TEACHER input={episode_tokens} "
+                    f"target_tokens={target_tokens} "
+                    f"target_text={json.dumps(target_text, ensure_ascii=False)}",
+                    flush=True,
+                )
             else:
-                episode_tokens = resolve_fixed_input_tokens(args)
-                print(f"[CHAT_INPUT] FIXED_INPUT tokens={episode_tokens}", flush=True)
+                row = fixed_rows[dataset_index % len(fixed_rows)]
+                dataset_index += 1
+
+                episode_tokens = [str(x).strip() for x in row.get("input_tokens", []) if str(x).strip()]
+                target_tokens = [str(x).strip() for x in row.get("target_tokens", []) if str(x).strip()]
+                target_text = str(row.get("target_text", "")).strip()
+
+                print(
+                    f"[CHAT_INPUT] FIXED_INPUT tokens={episode_tokens} "
+                    f"target_tokens={target_tokens} "
+                    f"target_text={json.dumps(target_text, ensure_ascii=False)}",
+                    flush=True,
+                )
 
             result = central.run_once(
                 input_tokens=episode_tokens,
                 depth=args.depth,
+                target_tokens=target_tokens,
+                target_text=target_text,
             )
 
             print("\n[BEST TEXT]")
