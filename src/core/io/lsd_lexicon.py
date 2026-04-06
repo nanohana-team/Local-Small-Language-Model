@@ -8,13 +8,29 @@ import sys
 import time
 import zlib
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, MutableMapping, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, MutableMapping
 
 MAGIC = b"LSLMDICT"
 VERSION = 1
 
 INDEXED_MAGIC = b"LSLMDX2"
 INDEXED_VERSION = 2
+
+CORE_BOOL_FIELDS = ["independent", "can_start", "can_end", "content_word", "function_word"]
+CORE_LIST_FIELDS = ["roles", "requires_prev", "requires_next", "forbid_prev", "forbid_next"]
+CORE_SCALAR_FIELDS = ["pos", "sub_pos", "conjugation_type", "conjugation_slot", "connectability"]
+DEFAULT_SEMANTIC_AXES = [
+    "valence",
+    "arousal",
+    "abstractness",
+    "sociality",
+    "temporality",
+    "agency",
+    "causality",
+    "certainty",
+    "deixis",
+    "discourse_force",
+]
 
 
 class ConsoleProgressBar:
@@ -152,12 +168,130 @@ def stable_json_dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _unique_keep_order(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _to_str_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    if value is None:
+        return []
+    return [str(value)]
+
+
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _is_entry_mapping(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    grammar = value.get("grammar")
+    if not isinstance(grammar, Mapping):
+        return False
     return (
-        isinstance(value, Mapping)
-        and isinstance(value.get("vector"), Mapping)
-        and "grammar" in value
+        isinstance(value.get("vector"), Mapping)
+        or "word" in value
+        or "category" in value
+        or "slots" in value
+        or "relations" in value
     )
+
+
+def _canonicalize_grammar(grammar: Any) -> Dict[str, Any]:
+    raw = dict(grammar) if isinstance(grammar, Mapping) else {}
+
+    sub_pos = raw.get("sub_pos", raw.get("subpos", ""))
+    pos = str(raw.get("pos", "unknown"))
+    conjugation_type = str(raw.get("conjugation_type", raw.get("conj_type", "none")))
+    conjugation_slot = str(raw.get("conjugation_slot", raw.get("conj_slot", "none")))
+    connectability = _to_float(raw.get("connectability", 0.0), 0.0)
+
+    out: Dict[str, Any] = {
+        "pos": pos,
+        "sub_pos": str(sub_pos),
+        "conjugation_type": conjugation_type,
+        "conjugation_slot": conjugation_slot,
+        "connectability": connectability,
+        "independent": _to_bool(raw.get("independent", True), True),
+        "can_start": _to_bool(raw.get("can_start", False), False),
+        "can_end": _to_bool(raw.get("can_end", False), False),
+        "content_word": _to_bool(raw.get("content_word", True), True),
+        "function_word": _to_bool(raw.get("function_word", False), False),
+        "roles": _to_str_list(raw.get("roles", [])),
+        "requires_prev": _to_str_list(raw.get("requires_prev", [])),
+        "requires_next": _to_str_list(raw.get("requires_next", [])),
+        "forbid_prev": _to_str_list(raw.get("forbid_prev", [])),
+        "forbid_next": _to_str_list(raw.get("forbid_next", [])),
+    }
+
+    for key, value in raw.items():
+        if key in {"subpos"}:
+            continue
+        if key not in out:
+            out[key] = value
+
+    return out
+
+
+def _canonicalize_vector(vector: Any) -> Dict[str, float]:
+    if not isinstance(vector, Mapping):
+        return {}
+    out: Dict[str, float] = {}
+    for key, value in vector.items():
+        out[str(key)] = round(_to_float(value, 0.0), 6)
+    return out
+
+
+def _canonicalize_entry(key: str, entry: Any) -> Dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        raise TypeError(f"Lexicon entry for {key!r} must be a mapping")
+
+    raw = dict(entry)
+    normalized: Dict[str, Any] = {
+        "word": str(raw.get("word", key)),
+        "category": str(raw.get("category", "unknown")),
+        "hierarchy": _to_str_list(raw.get("hierarchy", [])),
+        "vector": _canonicalize_vector(raw.get("vector", {})),
+        "grammar": _canonicalize_grammar(raw.get("grammar", {})),
+        "slots": list(raw.get("slots", [])) if isinstance(raw.get("slots", []), list) else [],
+        "relations": list(raw.get("relations", [])) if isinstance(raw.get("relations", []), list) else [],
+        "frequency": _to_float(raw.get("frequency", 0.0), 0.0),
+        "style_tags": _to_str_list(raw.get("style_tags", [])),
+        "meta": dict(raw.get("meta", {})) if isinstance(raw.get("meta", {}), Mapping) else {},
+    }
+
+    for field in ("word", "category", "hierarchy", "vector", "grammar", "slots", "relations", "frequency", "style_tags", "meta"):
+        raw.pop(field, None)
+
+    normalized.update(raw)
+    return normalized
 
 
 def _flatten_hierarchy_node(node: Any, entries: Dict[str, Dict[str, Any]]) -> None:
@@ -165,7 +299,7 @@ def _flatten_hierarchy_node(node: Any, entries: Dict[str, Dict[str, Any]]) -> No
         if _is_entry_mapping(node):
             word = str(node.get("word", "")).strip()
             if word:
-                entries[word] = dict(node)
+                entries[word] = _canonicalize_entry(word, node)
             return
         for value in node.values():
             _flatten_hierarchy_node(value, entries)
@@ -180,7 +314,7 @@ def flatten_hierarchical_lexicon(data: Mapping[str, Any]) -> Dict[str, Dict[str,
     if "entries" in data and isinstance(data["entries"], Mapping):
         for key, value in data["entries"].items():
             if _is_entry_mapping(value):
-                entries[str(key)] = dict(value)
+                entries[str(key)] = _canonicalize_entry(str(key), value)
         if entries:
             return entries
 
@@ -199,37 +333,53 @@ def _ensure_indexes(data: MutableMapping[str, Any], entries: Mapping[str, Dict[s
         indexes = {}
         data["indexes"] = indexes
 
-    indexes.setdefault("by_pos", {})
-    indexes.setdefault("can_start", [])
-    indexes.setdefault("can_end", [])
-    indexes.setdefault("content_word", [])
-    indexes.setdefault("function_word", [])
-    indexes.setdefault("entry_path", {})
-
     by_pos: Dict[str, List[str]] = {}
     can_start: List[str] = []
     can_end: List[str] = []
-    content_word: List[str] = []
-    function_word: List[str] = []
+    content_words: List[str] = []
+    function_words: List[str] = []
+    entry_path: Dict[str, List[str]] = {}
+
+    existing_entry_path = indexes.get("entry_path", {})
+    if not isinstance(existing_entry_path, Mapping):
+        existing_entry_path = {}
 
     for word, entry in entries.items():
-        grammar = entry.get("grammar", {})
+        grammar = _canonicalize_grammar(entry.get("grammar", {}))
         pos = str(grammar.get("pos", "unknown"))
         by_pos.setdefault(pos, []).append(word)
+
         if grammar.get("can_start", False):
             can_start.append(word)
         if grammar.get("can_end", False):
             can_end.append(word)
         if grammar.get("content_word", False):
-            content_word.append(word)
+            content_words.append(word)
         if grammar.get("function_word", False):
-            function_word.append(word)
+            function_words.append(word)
+
+        hierarchy = entry.get("hierarchy", [])
+        if isinstance(hierarchy, list) and hierarchy:
+            entry_path[word] = [str(v) for v in hierarchy] + [word]
+        else:
+            current_path = existing_entry_path.get(word)
+            if isinstance(current_path, list):
+                entry_path[word] = [str(v) for v in current_path]
+            elif isinstance(current_path, str):
+                entry_path[word] = [segment for segment in current_path.split("/") if segment]
+            else:
+                entry_path[word] = [word]
 
     indexes["by_pos"] = by_pos
     indexes["can_start"] = can_start
     indexes["can_end"] = can_end
-    indexes["content_word"] = content_word
-    indexes["function_word"] = function_word
+    indexes["content_words"] = content_words
+    indexes["function_words"] = function_words
+    indexes["entry_path"] = entry_path
+
+    # backward-compat aliases
+    indexes["content_word"] = list(content_words)
+    indexes["function_word"] = list(function_words)
 
 
 def _ensure_meta(data: MutableMapping[str, Any], entries: Mapping[str, Dict[str, Any]]) -> None:
@@ -238,27 +388,71 @@ def _ensure_meta(data: MutableMapping[str, Any], entries: Mapping[str, Dict[str,
         meta = {}
         data["meta"] = meta
 
-    if "semantic_axes" not in meta:
+    semantic_axes = meta.get("semantic_axes")
+    if not isinstance(semantic_axes, list) or not semantic_axes:
         axes: List[str] = []
         for entry in entries.values():
             vector = entry.get("vector", {})
             if isinstance(vector, Mapping):
                 axes.extend(str(k) for k in vector.keys())
-        deduped: List[str] = []
-        seen = set()
-        for axis in axes:
-            if axis not in seen:
-                seen.add(axis)
-                deduped.append(axis)
-        meta["semantic_axes"] = deduped
+        semantic_axes = _unique_keep_order(axes) or list(DEFAULT_SEMANTIC_AXES)
 
+    meta["semantic_axes"] = [str(v) for v in semantic_axes]
+    if "version" not in meta:
+        meta["version"] = "v3"
     meta["entry_count"] = len(entries)
+
+
+def _route_hierarchy_from_pos(pos: str) -> List[str]:
+    if pos == "pronoun":
+        return ["lexicon", "content_words", "pronouns", "other"]
+    if pos in {"particle_case"}:
+        return ["lexicon", "function_words", "particles", "case"]
+    if pos in {"particle_binding"}:
+        return ["lexicon", "function_words", "particles", "binding"]
+    if pos in {"particle_conjunctive"}:
+        return ["lexicon", "function_words", "particles", "conjunctive"]
+    if pos in {"particle_sentence_final"}:
+        return ["lexicon", "function_words", "particles", "sentence_final"]
+    if pos == "auxiliary":
+        return ["lexicon", "function_words", "auxiliaries"]
+    if pos == "copula":
+        return ["lexicon", "function_words", "copulas"]
+    if pos == "iteration_mark":
+        return ["lexicon", "function_words", "special_marks"]
+    if pos in {"verb", "verb_stem"}:
+        return ["lexicon", "content_words", "verbs", "stems", "oov"]
+    if pos == "verb_suffix":
+        return ["lexicon", "content_words", "verbs", "suffixes"]
+    if pos == "adjective_i":
+        return ["lexicon", "content_words", "adjectives", "i", "oov"]
+    if pos in {"adjective_stem", "adjective_na_helper"}:
+        if pos == "adjective_na_helper":
+            return ["lexicon", "content_words", "adjectives", "na", "helper"]
+        return ["lexicon", "content_words", "adjectives", "na", "stems", "oov"]
+    if pos == "adjective_i_ending":
+        return ["lexicon", "content_words", "adjectives", "i", "endings"]
+    if pos == "adverb":
+        return ["lexicon", "content_words", "adverbs", "oov"]
+    if pos == "conjunction":
+        return ["lexicon", "content_words", "conjunctions"]
+    if pos == "interjection":
+        return ["lexicon", "content_words", "interjections"]
+    if pos == "adnominal":
+        return ["lexicon", "content_words", "adnominals"]
+    if pos == "prefix":
+        return ["lexicon", "content_words", "prefixes"]
+    if pos == "suffix":
+        return ["lexicon", "content_words", "suffixes"]
+    return ["lexicon", "content_words", "nouns", "generated", "oov"]
 
 
 def build_hierarchical_container_from_entries(
     entries: Mapping[str, Dict[str, Any]],
     meta: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    canonical_entries = {str(k): _canonicalize_entry(str(k), v) for k, v in entries.items()}
+
     container: Dict[str, Any] = {
         "meta": dict(meta or {}),
         "lexicon": {
@@ -293,71 +487,50 @@ def build_hierarchical_container_from_entries(
         "indexes": {},
     }
 
-    entry_path: Dict[str, str] = {}
+    entry_path: Dict[str, List[str]] = {}
 
-    for word, entry in entries.items():
-        hierarchy = list(entry.get("hierarchy", []))
-        if hierarchy:
-            path = ["lexicon"] + hierarchy
+    for word, entry in canonical_entries.items():
+        hierarchy = entry.get("hierarchy", [])
+        if isinstance(hierarchy, list) and hierarchy:
+            path = ["lexicon"] + [str(v) for v in hierarchy]
         else:
             pos = str(entry.get("grammar", {}).get("pos", "unknown"))
-            if pos == "pronoun":
-                path = ["lexicon", "content_words", "pronouns", "other"]
-            elif pos in {"particle_case"}:
-                path = ["lexicon", "function_words", "particles", "case"]
-            elif pos in {"particle_binding"}:
-                path = ["lexicon", "function_words", "particles", "binding"]
-            elif pos in {"particle_conjunctive"}:
-                path = ["lexicon", "function_words", "particles", "conjunctive"]
-            elif pos in {"particle_sentence_final"}:
-                path = ["lexicon", "function_words", "particles", "sentence_final"]
-            elif pos == "auxiliary":
-                path = ["lexicon", "function_words", "auxiliaries"]
-            elif pos == "copula":
-                path = ["lexicon", "function_words", "copulas"]
-            elif pos == "iteration_mark":
-                path = ["lexicon", "function_words", "special_marks"]
-            elif pos in {"verb", "verb_stem"}:
-                path = ["lexicon", "content_words", "verbs", "stems", "oov"]
-            elif pos == "verb_suffix":
-                path = ["lexicon", "content_words", "verbs", "suffixes"]
-            elif pos == "adjective_i":
-                path = ["lexicon", "content_words", "adjectives", "i", "oov"]
-            elif pos in {"adjective_stem", "adjective_na_helper"}:
-                if pos == "adjective_na_helper":
-                    path = ["lexicon", "content_words", "adjectives", "na", "helper"]
-                else:
-                    path = ["lexicon", "content_words", "adjectives", "na", "stems", "oov"]
-            elif pos == "adjective_i_ending":
-                path = ["lexicon", "content_words", "adjectives", "i", "endings"]
-            elif pos == "adverb":
-                path = ["lexicon", "content_words", "adverbs", "oov"]
-            elif pos == "conjunction":
-                path = ["lexicon", "content_words", "conjunctions"]
-            elif pos == "interjection":
-                path = ["lexicon", "content_words", "interjections"]
-            elif pos == "adnominal":
-                path = ["lexicon", "content_words", "adnominals"]
-            elif pos == "prefix":
-                path = ["lexicon", "content_words", "prefixes"]
-            elif pos == "suffix":
-                path = ["lexicon", "content_words", "suffixes"]
-            else:
-                path = ["lexicon", "content_words", "nouns", "generated", "oov"]
+            path = _route_hierarchy_from_pos(pos)
 
-        node = container
+        node: Dict[str, Any] = container
         for segment in path:
-            if not isinstance(node, dict):
+            next_node = node.setdefault(segment, {})
+            if not isinstance(next_node, dict):
                 raise TypeError(f"Hierarchy node is not a dict while inserting {word!r}: {segment!r}")
-            node = node.setdefault(segment, {})
+            node = next_node
+
         entry_copy = dict(entry)
         entry_copy["hierarchy"] = path[1:]
         node[word] = entry_copy
-        entry_path[word] = "/".join(path + [word])
+        entry_path[word] = path[1:] + [word]
 
     container["indexes"]["entry_path"] = entry_path
-    _ensure_indexes(container, entries)
-    _ensure_meta(container, entries)
+    _ensure_indexes(container, canonical_entries)
+    _ensure_meta(container, canonical_entries)
+    container["entries"] = canonical_entries
+    return container
+
+
+def normalize_lexicon_container(data: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(data, Mapping):
+        raise TypeError("Unsupported lexicon container format")
+
+    entries = flatten_hierarchical_lexicon(data)
+    meta = dict(data.get("meta", {})) if isinstance(data.get("meta", {}), Mapping) else {}
+    container = build_hierarchical_container_from_entries(entries, meta=meta)
+
+    indexes = data.get("indexes", {})
+    if isinstance(indexes, Mapping):
+        merged_indexes = dict(indexes)
+        merged_indexes.update(container.get("indexes", {}))
+        container["indexes"] = merged_indexes
+        _ensure_indexes(container, container["entries"])
+
     return container
 
 
@@ -367,13 +540,7 @@ def load_json_lexicon_container(path: str | Path) -> Dict[str, Any]:
         data = json.load(f)
     if not isinstance(data, dict):
         raise TypeError("Unsupported JSON lexicon format")
-
-    entries = flatten_hierarchical_lexicon(data)
-    container: Dict[str, Any] = dict(data)
-    container["entries"] = entries
-    _ensure_indexes(container, entries)
-    _ensure_meta(container, entries)
-    return container
+    return normalize_lexicon_container(data)
 
 
 def collect_string_table(data: Dict[str, Any]) -> tuple[List[str], Dict[str, int]]:
@@ -382,18 +549,18 @@ def collect_string_table(data: Dict[str, Any]) -> tuple[List[str], Dict[str, int
     meta = data.get("meta", {})
     entries = data.get("entries", {})
 
-    def add(s: Any) -> None:
-        if isinstance(s, str):
-            strings.add(s)
+    def add(value: Any) -> None:
+        if isinstance(value, str):
+            strings.add(value)
 
     def walk(obj: Any) -> None:
         if isinstance(obj, dict):
-            for k, v in obj.items():
-                add(k)
-                walk(v)
+            for key, value in obj.items():
+                add(key)
+                walk(value)
         elif isinstance(obj, list):
-            for x in obj:
-                walk(x)
+            for value in obj:
+                walk(value)
         elif isinstance(obj, str):
             add(obj)
 
@@ -404,19 +571,20 @@ def collect_string_table(data: Dict[str, Any]) -> tuple[List[str], Dict[str, int
         add(entry.get("category"))
 
         vector = entry.get("vector", {})
-        for k in vector.keys():
-            add(k)
+        if isinstance(vector, Mapping):
+            for key in vector.keys():
+                add(key)
 
-        grammar = entry.get("grammar", {})
-        for k, v in grammar.items():
-            add(k)
-            if isinstance(v, str):
-                add(v)
-            elif isinstance(v, list):
-                for x in v:
+        grammar = _canonicalize_grammar(entry.get("grammar", {}))
+        for key, value in grammar.items():
+            add(key)
+            if isinstance(value, str):
+                add(value)
+            elif isinstance(value, list):
+                for x in value:
                     add(x)
-            elif isinstance(v, dict):
-                walk(v)
+            elif isinstance(value, dict):
+                walk(value)
 
     table = sorted(strings)
     index = {s: i for i, s in enumerate(table)}
@@ -439,8 +607,8 @@ def decode_string_table(buf: io.BytesIO) -> List[str]:
 def encode_string_id_list(values: List[str], s2i: Dict[str, int]) -> bytes:
     out = bytearray()
     out += write_uvarint(len(values))
-    for v in values:
-        out += write_uvarint(s2i[v])
+    for value in values:
+        out += write_uvarint(s2i[value])
     return bytes(out)
 
 
@@ -451,6 +619,52 @@ def decode_string_id_list(buf: io.BytesIO, table: List[str]) -> List[str]:
         idx = read_uvarint(buf)
         out.append(table[idx])
     return out
+
+
+def _decode_binary_entry(
+    buf: io.BytesIO,
+    string_table: List[str],
+    semantic_axes: List[str],
+) -> Dict[str, Any]:
+    word = string_table[read_uvarint(buf)]
+    category = string_table[read_uvarint(buf)]
+
+    vec_blob = read_bytes_with_len(buf)
+    qvec = unpack_i16_list(vec_blob, len(semantic_axes))
+    vector = {
+        semantic_axes[i]: round(dequantize_i16_to_unit_float(qvec[i]), 6)
+        for i in range(len(semantic_axes))
+    }
+
+    pos = string_table[read_uvarint(buf)]
+    sub_pos = string_table[read_uvarint(buf)]
+    conj_type = string_table[read_uvarint(buf)]
+    conj_slot = string_table[read_uvarint(buf)]
+    connectability = round(struct.unpack("<f", buf.read(4))[0], 6)
+
+    flags = struct.unpack("<B", buf.read(1))[0]
+    grammar = {
+        "pos": pos,
+        "sub_pos": sub_pos,
+        "conjugation_type": conj_type,
+        "conjugation_slot": conj_slot,
+        "connectability": connectability,
+    }
+    for i, field in enumerate(CORE_BOOL_FIELDS):
+        grammar[field] = bool(flags & (1 << i))
+    for field in CORE_LIST_FIELDS:
+        grammar[field] = decode_string_id_list(buf, string_table)
+
+    extras_blob = read_bytes_with_len(buf)
+    extras = json.loads(extras_blob.decode("utf-8"))
+    if isinstance(extras.get("grammar"), Mapping):
+        grammar.update(dict(extras["grammar"]))
+
+    entry = {"word": word, "category": category, "vector": vector, "grammar": grammar}
+    if isinstance(extras.get("entry"), Mapping):
+        entry.update(dict(extras["entry"]))
+
+    return _canonicalize_entry(word, entry)
 
 
 def load_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
@@ -494,54 +708,17 @@ def load_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
     meta["grammar_axes"] = grammar_axes
 
     entry_count = read_uvarint(buf)
-
-    bool_fields = ["independent", "can_start", "can_end", "content_word", "function_word"]
-    list_fields = ["roles", "requires_prev", "requires_next", "forbid_prev", "forbid_next"]
-
     entries: Dict[str, Any] = {}
+
     progress = ConsoleProgressBar(entry_count, title=f"Loading {path.name}", enabled=should_show_progress(path))
     for _ in range(entry_count):
         key = string_table[read_uvarint(buf)]
-        word = string_table[read_uvarint(buf)]
-        category = string_table[read_uvarint(buf)]
-
-        vec_blob = read_bytes_with_len(buf)
-        qvec = unpack_i16_list(vec_blob, len(semantic_axes))
-        vector = {semantic_axes[i]: round(dequantize_i16_to_unit_float(qvec[i]), 6) for i in range(len(semantic_axes))}
-
-        pos = string_table[read_uvarint(buf)]
-        subpos = string_table[read_uvarint(buf)]
-        conj_type = string_table[read_uvarint(buf)]
-        conj_slot = string_table[read_uvarint(buf)]
-        connectability = round(struct.unpack("<f", buf.read(4))[0], 6)
-
-        flags = struct.unpack("<B", buf.read(1))[0]
-        grammar = {
-            "pos": pos,
-            "subpos": subpos,
-            "conjugation_type": conj_type,
-            "conjugation_slot": conj_slot,
-            "connectability": connectability,
-        }
-        for i, bf in enumerate(bool_fields):
-            grammar[bf] = bool(flags & (1 << i))
-        for lf in list_fields:
-            grammar[lf] = decode_string_id_list(buf, string_table)
-
-        extras_blob = read_bytes_with_len(buf)
-        extras = json.loads(extras_blob.decode("utf-8"))
-        if extras.get("grammar"):
-            grammar.update(extras["grammar"])
-
-        entry = {"word": word, "category": category, "vector": vector, "grammar": grammar}
-        if extras.get("entry"):
-            entry.update(extras["entry"])
+        entry = _decode_binary_entry(buf, string_table, semantic_axes)
         entries[key] = entry
         progress.update()
-
     progress.close()
-    container = {"meta": meta, "entries": entries}
-    return build_hierarchical_container_from_entries(entries, meta=meta) | {"entries": entries}
+
+    return normalize_lexicon_container({"meta": meta, "entries": entries})
 
 
 class IndexedLSDLexicon(Mapping[str, Dict[str, Any]]):
@@ -617,45 +794,7 @@ class IndexedLSDLexicon(Mapping[str, Dict[str, Any]]):
     def _decode_record(self, rec_off: int, rec_size: int) -> Dict[str, Any]:
         rec = bytes(self._mm[rec_off:rec_off + rec_size])
         buf = io.BytesIO(rec)
-
-        word = self._string_table[read_uvarint(buf)]
-        category = self._string_table[read_uvarint(buf)]
-
-        vec_blob = read_bytes_with_len(buf)
-        qvec = unpack_i16_list(vec_blob, len(self._semantic_axes))
-        vector = {self._semantic_axes[i]: round(dequantize_i16_to_unit_float(qvec[i]), 6) for i in range(len(self._semantic_axes))}
-
-        pos = self._string_table[read_uvarint(buf)]
-        subpos = self._string_table[read_uvarint(buf)]
-        conj_type = self._string_table[read_uvarint(buf)]
-        conj_slot = self._string_table[read_uvarint(buf)]
-        connectability = round(struct.unpack("<f", buf.read(4))[0], 6)
-
-        bool_fields = ["independent", "can_start", "can_end", "content_word", "function_word"]
-        list_fields = ["roles", "requires_prev", "requires_next", "forbid_prev", "forbid_next"]
-
-        flags = struct.unpack("<B", buf.read(1))[0]
-        grammar = {
-            "pos": pos,
-            "subpos": subpos,
-            "conjugation_type": conj_type,
-            "conjugation_slot": conj_slot,
-            "connectability": connectability,
-        }
-        for i, bf in enumerate(bool_fields):
-            grammar[bf] = bool(flags & (1 << i))
-        for lf in list_fields:
-            grammar[lf] = decode_string_id_list(buf, self._string_table)
-
-        extras_blob = read_bytes_with_len(buf)
-        extras = json.loads(extras_blob.decode("utf-8"))
-        if extras.get("grammar"):
-            grammar.update(extras["grammar"])
-
-        entry = {"word": word, "category": category, "vector": vector, "grammar": grammar}
-        if extras.get("entry"):
-            entry.update(extras["entry"])
-        return entry
+        return _decode_binary_entry(buf, self._string_table, self._semantic_axes)
 
     def __getitem__(self, key: str) -> Dict[str, Any]:
         row_index = self._key_to_row[key]
@@ -693,11 +832,11 @@ def load_indexed_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
     with IndexedLSDLexicon(path) as lex:
         progress = ConsoleProgressBar(len(lex), title=f"Loading {Path(path).name}", enabled=should_show_progress(path))
         entries: Dict[str, Any] = {}
-        for k in lex.keys():
-            entries[k] = lex[k]
+        for key in lex.keys():
+            entries[key] = lex[key]
             progress.update()
         progress.close()
-        return build_hierarchical_container_from_entries(entries, meta=lex.meta) | {"entries": entries}
+        return normalize_lexicon_container({"meta": lex.meta, "entries": entries})
 
 
 def load_lexicon_container(path: str | Path) -> Dict[str, Any]:
@@ -726,18 +865,29 @@ def open_indexed_lexicon(path: str | Path) -> IndexedLSDLexicon:
 
 def save_json_lexicon_container(path: str | Path, data: Dict[str, Any]) -> None:
     path = Path(path)
-    entries = data.get("entries", {})
-    if ("lexicon" not in data or "indexes" not in data) and isinstance(entries, Mapping):
-        data = build_hierarchical_container_from_entries(entries, meta=data.get("meta", {})) | {"entries": dict(entries)}
-    save_obj = dict(data)
+    container = normalize_lexicon_container(data)
+    save_obj = dict(container)
     save_obj.pop("entries", None)
     with path.open("w", encoding="utf-8") as f:
         json.dump(save_obj, f, ensure_ascii=False, indent=2)
 
 
+def _extract_binary_payload_fields(entry: Dict[str, Any]) -> tuple[str, str, Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    word = str(entry.get("word", ""))
+    category = str(entry.get("category", "unknown"))
+    vector = _canonicalize_vector(entry.get("vector", {}))
+    grammar = _canonicalize_grammar(entry.get("grammar", {}))
+
+    known_scalar_grammar_fields = set(CORE_SCALAR_FIELDS) | set(CORE_BOOL_FIELDS) | set(CORE_LIST_FIELDS)
+    extra_grammar = {k: v for k, v in grammar.items() if k not in known_scalar_grammar_fields}
+    extra_entry = {k: v for k, v in entry.items() if k not in {"word", "category", "vector", "grammar"}}
+    return word, category, vector, grammar, extra_grammar, extra_entry
+
+
 def save_lsd_lexicon_container(path: str | Path, data: Dict[str, Any], compress_level: int = 9) -> None:
-    meta = dict(data.get("meta", {}))
-    entries: Dict[str, Any] = dict(data.get("entries", {}))
+    container = normalize_lexicon_container(data)
+    meta = dict(container.get("meta", {}))
+    entries: Dict[str, Any] = dict(container.get("entries", {}))
     semantic_axes: List[str] = list(meta.get("semantic_axes", []))
     grammar_axes: List[str] = list(meta.get("grammar_axes", []))
 
@@ -764,17 +914,10 @@ def save_lsd_lexicon_container(path: str | Path, data: Dict[str, Any], compress_
     payload += encode_string_table(string_table)
     payload += write_uvarint(len(entry_keys))
 
-    bool_fields = ["independent", "can_start", "can_end", "content_word", "function_word"]
-    list_fields = ["roles", "requires_prev", "requires_next", "forbid_prev", "forbid_next"]
-    known_scalar_grammar_fields = {"pos", "subpos", "conjugation_type", "conjugation_slot", "connectability", *bool_fields, *list_fields}
-
     progress = ConsoleProgressBar(max(len(entry_keys), 1), title=f"Saving {Path(path).name}", enabled=should_show_progress(path, min_bytes=0))
     for key in entry_keys:
         entry = entries[key]
-        word = entry.get("word", key)
-        category = entry.get("category", "")
-        vector = entry.get("vector", {})
-        grammar = entry.get("grammar", {})
+        word, category, vector, grammar, extra_grammar, extra_entry = _extract_binary_payload_fields(entry)
 
         payload += write_uvarint(s2i[key])
         payload += write_uvarint(s2i[word])
@@ -783,32 +926,30 @@ def save_lsd_lexicon_container(path: str | Path, data: Dict[str, Any], compress_
         qvec = [quantize_unit_float_to_i16(vector.get(ax, 0.0)) for ax in semantic_axes]
         payload += write_bytes_with_len(pack_i16_list(qvec))
 
-        pos = grammar.get("pos", "")
-        subpos = grammar.get("subpos", "")
-        conj_type = grammar.get("conjugation_type", "none")
-        conj_slot = grammar.get("conjugation_slot", "none")
+        pos = str(grammar.get("pos", ""))
+        sub_pos = str(grammar.get("sub_pos", ""))
+        conj_type = str(grammar.get("conjugation_type", "none"))
+        conj_slot = str(grammar.get("conjugation_slot", "none"))
         connectability = float(grammar.get("connectability", 0.0))
 
-        payload += write_uvarint(s2i[pos] if pos in s2i else 0)
-        payload += write_uvarint(s2i[subpos] if subpos in s2i else 0)
-        payload += write_uvarint(s2i[conj_type] if conj_type in s2i else 0)
-        payload += write_uvarint(s2i[conj_slot] if conj_slot in s2i else 0)
+        payload += write_uvarint(s2i[pos])
+        payload += write_uvarint(s2i[sub_pos])
+        payload += write_uvarint(s2i[conj_type])
+        payload += write_uvarint(s2i[conj_slot])
         payload += struct.pack("<f", connectability)
 
         flags = 0
-        for i, bf in enumerate(bool_fields):
-            if bool(grammar.get(bf, False)):
+        for i, field in enumerate(CORE_BOOL_FIELDS):
+            if bool(grammar.get(field, False)):
                 flags |= (1 << i)
         payload += struct.pack("<B", flags)
 
-        for lf in list_fields:
-            values = grammar.get(lf, [])
+        for field in CORE_LIST_FIELDS:
+            values = grammar.get(field, [])
             if not isinstance(values, list):
                 values = []
-            payload += encode_string_id_list(values, s2i)
+            payload += encode_string_id_list([str(v) for v in values], s2i)
 
-        extra_grammar = {k: v for k, v in grammar.items() if k not in known_scalar_grammar_fields}
-        extra_entry = {k: v for k, v in entry.items() if k not in {"word", "category", "vector", "grammar"}}
         extras = {"entry": extra_entry, "grammar": extra_grammar}
         payload += write_bytes_with_len(stable_json_dumps(extras).encode("utf-8"))
         progress.update()
@@ -824,8 +965,9 @@ def save_lsd_lexicon_container(path: str | Path, data: Dict[str, Any], compress_
 
 
 def save_indexed_lsd_lexicon_container(path: str | Path, data: Dict[str, Any]) -> None:
-    meta = dict(data.get("meta", {}))
-    entries: Dict[str, Any] = dict(data.get("entries", {}))
+    container = normalize_lexicon_container(data)
+    meta = dict(container.get("meta", {}))
+    entries: Dict[str, Any] = dict(container.get("entries", {}))
     semantic_axes: List[str] = list(meta.get("semantic_axes", []))
     if not semantic_axes:
         _ensure_meta({"meta": meta}, entries)
@@ -835,20 +977,13 @@ def save_indexed_lsd_lexicon_container(path: str | Path, data: Dict[str, Any]) -
     string_table, s2i = collect_string_table(flat_container)
     entry_keys = sorted(entries.keys())
 
-    bool_fields = ["independent", "can_start", "can_end", "content_word", "function_word"]
-    list_fields = ["roles", "requires_prev", "requires_next", "forbid_prev", "forbid_next"]
-    known_scalar_grammar_fields = {"pos", "subpos", "conjugation_type", "conjugation_slot", "connectability", *bool_fields, *list_fields}
-
     records = bytearray()
     index_rows: List[tuple[int, int, int]] = []
     progress = ConsoleProgressBar(max(len(entry_keys), 1), title=f"Saving {Path(path).name}", enabled=should_show_progress(path, min_bytes=0))
 
     for key in entry_keys:
         entry = entries[key]
-        word = entry.get("word", key)
-        category = entry.get("category", "")
-        vector = entry.get("vector", {})
-        grammar = entry.get("grammar", {})
+        word, category, vector, grammar, extra_grammar, extra_entry = _extract_binary_payload_fields(entry)
 
         rec = bytearray()
         rec += write_uvarint(s2i[word])
@@ -857,32 +992,30 @@ def save_indexed_lsd_lexicon_container(path: str | Path, data: Dict[str, Any]) -
         qvec = [quantize_unit_float_to_i16(vector.get(ax, 0.0)) for ax in semantic_axes]
         rec += write_bytes_with_len(pack_i16_list(qvec))
 
-        pos = grammar.get("pos", "")
-        subpos = grammar.get("subpos", "")
-        conj_type = grammar.get("conjugation_type", "none")
-        conj_slot = grammar.get("conjugation_slot", "none")
+        pos = str(grammar.get("pos", ""))
+        sub_pos = str(grammar.get("sub_pos", ""))
+        conj_type = str(grammar.get("conjugation_type", "none"))
+        conj_slot = str(grammar.get("conjugation_slot", "none"))
         connectability = float(grammar.get("connectability", 0.0))
 
-        rec += write_uvarint(s2i[pos] if pos in s2i else 0)
-        rec += write_uvarint(s2i[subpos] if subpos in s2i else 0)
-        rec += write_uvarint(s2i[conj_type] if conj_type in s2i else 0)
-        rec += write_uvarint(s2i[conj_slot] if conj_slot in s2i else 0)
+        rec += write_uvarint(s2i[pos])
+        rec += write_uvarint(s2i[sub_pos])
+        rec += write_uvarint(s2i[conj_type])
+        rec += write_uvarint(s2i[conj_slot])
         rec += struct.pack("<f", connectability)
 
         flags = 0
-        for i, bf in enumerate(bool_fields):
-            if bool(grammar.get(bf, False)):
+        for i, field in enumerate(CORE_BOOL_FIELDS):
+            if bool(grammar.get(field, False)):
                 flags |= (1 << i)
         rec += struct.pack("<B", flags)
 
-        for lf in list_fields:
-            values = grammar.get(lf, [])
+        for field in CORE_LIST_FIELDS:
+            values = grammar.get(field, [])
             if not isinstance(values, list):
                 values = []
-            rec += encode_string_id_list(values, s2i)
+            rec += encode_string_id_list([str(v) for v in values], s2i)
 
-        extra_grammar = {k: v for k, v in grammar.items() if k not in known_scalar_grammar_fields}
-        extra_entry = {k: v for k, v in entry.items() if k not in {"word", "category", "vector", "grammar"}}
         extras = {"entry": extra_entry, "grammar": extra_grammar}
         rec += write_bytes_with_len(stable_json_dumps(extras).encode("utf-8"))
 
