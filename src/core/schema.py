@@ -127,6 +127,8 @@ class GrammarConstraints:
     independent: bool = True
     content_word: bool = True
     function_word: bool = False
+    proper_noun: bool = False
+    named_entity_type: str = ""
     requires_prev: List[str] = field(default_factory=list)
     requires_next: List[str] = field(default_factory=list)
     forbid_prev: List[str] = field(default_factory=list)
@@ -144,6 +146,8 @@ class GrammarConstraints:
             independent=bool(data.get("independent", True)),
             content_word=bool(data.get("content_word", True)),
             function_word=bool(data.get("function_word", False)),
+            proper_noun=bool(data.get("proper_noun", False)),
+            named_entity_type=str(data.get("named_entity_type", "")),
             requires_prev=[str(x) for x in data.get("requires_prev", [])],
             requires_next=[str(x) for x in data.get("requires_next", [])],
             forbid_prev=[str(x) for x in data.get("forbid_prev", [])],
@@ -349,6 +353,8 @@ class TokenizationToken:
     normalized_tokens: List[str] = field(default_factory=list)
     known: bool = True
     pos_hint: str = ""
+    proper_noun_candidate: bool = False
+    named_entity_type_hint: str = ""
     start: int = 0
     end: int = 0
     reason: str = ""
@@ -361,6 +367,8 @@ class UnknownSpan:
     end: int = 0
     reason: str = ""
     pos_hint: str = "unknown"
+    proper_noun_candidate: bool = False
+    named_entity_type_hint: str = ""
     status: str = "pending"
     suggested_words: List[str] = field(default_factory=list)
 

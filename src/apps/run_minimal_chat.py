@@ -76,6 +76,8 @@ class SurfaceNormalizer:
         self.surface_map = self._build_surface_map(self.lexicon)
         self.length_index = self._build_length_index(self.surface_map.keys())
         self.pos_by_surface = self._build_pos_by_surface(self.lexicon)
+        self.proper_noun_by_surface = self._build_proper_noun_by_surface(self.lexicon)
+        self.named_entity_type_by_surface = self._build_named_entity_type_by_surface(self.lexicon)
 
     def refresh_runtime_lexicon(self) -> None:
         self._refresh_indexes()
@@ -132,6 +134,8 @@ class SurfaceNormalizer:
                         normalized_tokens=list(self.surface_map[matched]),
                         known=True,
                         pos_hint=self.pos_by_surface.get(matched, ""),
+                        proper_noun_candidate=bool(self.proper_noun_by_surface.get(matched, False)),
+                        named_entity_type_hint=self.named_entity_type_by_surface.get(matched, ""),
                         start=i,
                         end=i + len(matched),
                         reason="lexicon_longest_match",
@@ -140,13 +144,15 @@ class SurfaceNormalizer:
                 i += len(matched)
                 continue
 
-            surface, end, pos_hint = self._consume_unknown_span(text, i, ignore_single_char_matches=True)
+            surface, end, pos_hint, proper_noun_candidate, named_entity_type_hint = self._consume_unknown_span(text, i, ignore_single_char_matches=True)
             tokenization.append(
                 TokenizationToken(
                     surface=surface,
                     normalized_tokens=[surface],
                     known=False,
                     pos_hint=pos_hint,
+                    proper_noun_candidate=proper_noun_candidate,
+                    named_entity_type_hint=named_entity_type_hint,
                     start=i,
                     end=end,
                     reason="unknown_span",
@@ -159,6 +165,8 @@ class SurfaceNormalizer:
                     end=end,
                     reason="unmatched_surface_span",
                     pos_hint=pos_hint,
+                    proper_noun_candidate=proper_noun_candidate,
+                    named_entity_type_hint=named_entity_type_hint,
                     status="detected",
                     suggested_words=[surface],
                 )
@@ -233,6 +241,42 @@ class SurfaceNormalizer:
                     mapping.setdefault(surface, pos)
         return mapping
 
+    def _build_proper_noun_by_surface(self, lexicon: LexiconContainer) -> Dict[str, bool]:
+        mapping: Dict[str, bool] = {}
+        for entry in lexicon.entries.values():
+            proper = bool(entry.category == "proper_noun" or entry.grammar.proper_noun or entry.grammar.sub_pos == "proper_noun")
+            if not proper:
+                continue
+            if entry.word:
+                mapping[entry.word] = True
+            for alias in entry.aliases:
+                alias_text = str(alias).strip()
+                if alias_text:
+                    mapping[alias_text] = True
+            for form in entry.surface_forms:
+                surface = str(form.surface).strip()
+                if surface:
+                    mapping[surface] = True
+        return mapping
+
+    def _build_named_entity_type_by_surface(self, lexicon: LexiconContainer) -> Dict[str, str]:
+        mapping: Dict[str, str] = {}
+        for entry in lexicon.entries.values():
+            entity_type = str(entry.grammar.named_entity_type or entry.meta.get("named_entity_type", "")).strip()
+            if not entity_type:
+                continue
+            if entry.word:
+                mapping.setdefault(entry.word, entity_type)
+            for alias in entry.aliases:
+                alias_text = str(alias).strip()
+                if alias_text:
+                    mapping.setdefault(alias_text, entity_type)
+            for form in entry.surface_forms:
+                surface = str(form.surface).strip()
+                if surface:
+                    mapping.setdefault(surface, entity_type)
+        return mapping
+
     def _build_length_index(self, words: Iterable[str]) -> Dict[int, set[str]]:
         index: Dict[int, set[str]] = {}
         for word in words:
@@ -251,13 +295,13 @@ class SurfaceNormalizer:
                 return piece
         return ""
 
-    def _consume_unknown_span(self, text: str, start: int, ignore_single_char_matches: bool = False) -> Tuple[str, int, str]:
+    def _consume_unknown_span(self, text: str, start: int, ignore_single_char_matches: bool = False) -> Tuple[str, int, str, bool, str]:
         n = len(text)
         if start >= n:
-            return "", start, "unknown"
+            return "", start, "unknown", False, ""
         ch = text[start]
         if self._is_hard_boundary(ch):
-            return ch, start + 1, "symbol"
+            return ch, start + 1, "symbol", False, ""
 
         end = start + 1
         while end < n:
@@ -276,7 +320,13 @@ class SurfaceNormalizer:
         if end <= start:
             end = start + 1
         surface = text[start:end]
-        return surface, end, self._guess_pos_hint(surface)
+        pos_hint, proper_noun_candidate, named_entity_type_hint = self._guess_unknown_hints(
+            surface=surface,
+            full_text=text,
+            start=start,
+            end=end,
+        )
+        return surface, end, pos_hint, proper_noun_candidate, named_entity_type_hint
 
     def _prefer_unknown_over_match(self, text: str, start: int, matched: str) -> bool:
         if len(str(matched)) != 1:
@@ -285,7 +335,7 @@ class SurfaceNormalizer:
             return False
         if text[start + 1].isspace() or self._is_hard_boundary(text[start + 1]):
             return False
-        preview_surface, _, _ = self._consume_unknown_span(text, start, ignore_single_char_matches=True)
+        preview_surface, _, _, _, _ = self._consume_unknown_span(text, start, ignore_single_char_matches=True)
         if len(preview_surface) <= 1:
             return False
         pos = self.pos_by_surface.get(matched, "")
@@ -295,23 +345,63 @@ class SurfaceNormalizer:
         next_class = self._char_class(text[start + 1])
         return matched_class not in {"symbol", "space"} and next_class not in {"symbol", "space"}
 
-    def _guess_pos_hint(self, surface: str) -> str:
+    def _guess_unknown_hints(self, *, surface: str, full_text: str, start: int, end: int) -> Tuple[str, bool, str]:
         text = str(surface or "").strip()
         if not text:
-            return "unknown"
+            return "unknown", False, ""
+
+        pos_hint = "unknown"
+        proper_noun_candidate = False
+        named_entity_type_hint = ""
+
         if all('ぁ' <= ch <= 'ん' or ch == 'ー' for ch in text):
             if text.endswith('に'):
-                return 'adverb'
-            if text.endswith('い'):
-                return 'adjective'
-            return 'adverb'
-        if all('ァ' <= ch <= 'ヶ' or ch == 'ー' for ch in text):
-            return 'noun'
-        if all(ch.isascii() and (ch.isalpha() or ch.isdigit()) for ch in text):
-            return 'noun'
-        if any('一' <= ch <= '龯' for ch in text):
-            return 'noun'
-        return 'unknown'
+                pos_hint = 'adverb'
+            elif text.endswith('い'):
+                pos_hint = 'adjective'
+            else:
+                pos_hint = 'adverb'
+        elif all('ァ' <= ch <= 'ヶ' or ch == 'ー' for ch in text):
+            pos_hint = 'noun'
+            if len(text) >= 3:
+                proper_noun_candidate = True
+                named_entity_type_hint = 'product'
+        elif all(ch.isascii() and (ch.isalpha() or ch.isdigit() or ch in {'_', '-', '.'}) for ch in text):
+            pos_hint = 'noun'
+            proper_noun_candidate = True
+            named_entity_type_hint = 'service'
+        elif any('一' <= ch <= '龯' for ch in text):
+            pos_hint = 'noun'
+        else:
+            pos_hint = 'unknown'
+
+        if any(ch.isascii() and ch.isupper() for ch in text):
+            proper_noun_candidate = True
+            named_entity_type_hint = named_entity_type_hint or 'organization'
+
+        if '・' in text or '·' in text:
+            proper_noun_candidate = True
+            named_entity_type_hint = named_entity_type_hint or 'person'
+
+        next_window = full_text[end:end + 3]
+        if next_window.startswith(('さん', 'ちゃん', 'くん', '氏', '様', '先生')):
+            pos_hint = 'noun'
+            proper_noun_candidate = True
+            named_entity_type_hint = 'person'
+
+        if text.startswith(('株式会社', '有限会社', '合同会社', '学校法人')):
+            pos_hint = 'noun'
+            proper_noun_candidate = True
+            named_entity_type_hint = 'organization'
+
+        if text.endswith(('駅', '市', '町', '村', '県', '府', '都')) and any('一' <= ch <= '龯' for ch in text):
+            proper_noun_candidate = True
+            named_entity_type_hint = named_entity_type_hint or 'place'
+
+        if proper_noun_candidate and pos_hint == 'unknown':
+            pos_hint = 'noun'
+
+        return pos_hint, proper_noun_candidate, named_entity_type_hint
 
     def _should_break_unknown_span(self, left: str, right: str) -> bool:
         left_class = self._char_class(left)

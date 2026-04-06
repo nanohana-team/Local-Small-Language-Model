@@ -101,6 +101,8 @@ class UnknownWordLearner:
                 'end': int(span.end),
                 'reason': span.reason,
                 'pos_hint': span.pos_hint,
+                'proper_noun_candidate': bool(span.proper_noun_candidate),
+                'named_entity_type_hint': span.named_entity_type_hint,
                 'occurrence_count': occurrence_count,
                 'entry': entry_payload,
             }
@@ -125,24 +127,31 @@ class UnknownWordLearner:
         system_prompt = (
             'You are generating a minimal Japanese lexicon entry for an unknown token in LSLM v3. '
             'Return JSON only. Keep the schema minimal and conservative. '
-            'Do not hallucinate rich semantics. Prefer category=surface or adverb/noun/adjective/verb when obvious.'
+            'Do not hallucinate rich semantics. When the token is a proper noun, prefer category="proper_noun". '
+            'A proper noun must set grammar.proper_noun=true and grammar.named_entity_type to a stable value such as person/place/organization/product/service/work/event/other.'
         )
         user_prompt = (
             'Create one lexicon entry candidate for the unknown Japanese token below.\n'
             'Requirements:\n'
             '- JSON object only\n'
             '- required keys: word, category, aliases, surface_forms, grammar, style_tags, meta\n'
-            '- grammar must contain at least pos, can_start, can_end, independent, content_word, function_word\n'
+            '- allowed category examples: proper_noun, surface, noun, adverb, adjective, verb\n'
+            '- grammar must contain at least pos, can_start, can_end, independent, content_word, function_word, proper_noun, named_entity_type\n'
+            '- use category="proper_noun" when this token is likely a person/place/organization/product/service/work/event name\n'
+            '- if category is proper_noun, set grammar.pos="noun", grammar.sub_pos="proper_noun", grammar.proper_noun=true\n'
+            '- if not a proper noun, set grammar.proper_noun=false and grammar.named_entity_type=""\n'
             '- surface_forms must include the original surface\n'
             '- keep aliases small\n'
             '- if unsure, use category="surface" and grammar.pos="unknown"\n\n'
             f'surface: {surface}\n'
             f'context: {raw_text}\n'
             f'pos_hint: {span.pos_hint}\n'
+            f'proper_noun_candidate: {span.proper_noun_candidate}\n'
+            f'named_entity_type_hint: {span.named_entity_type_hint or ""}\n'
             'Return example:\n'
-            '{"word":"のんびり","category":"adverb","aliases":[],"surface_forms":[{"form":"plain","surface":"のんびり","tokens":["のんびり"]}],'
-            '"grammar":{"pos":"adverb","can_start":true,"can_end":false,"independent":true,"content_word":true,"function_word":false},'
-            '"style_tags":["daily"],"meta":{"generated_by":"llm_unknown_word"}}'
+            '{"word":"VRChat","category":"proper_noun","aliases":[],"surface_forms":[{"form":"plain","surface":"VRChat","tokens":["VRChat"]}],'
+            '"grammar":{"pos":"noun","sub_pos":"proper_noun","can_start":true,"can_end":false,"independent":true,"content_word":true,"function_word":false,"proper_noun":true,"named_entity_type":"service"},'
+            '"style_tags":["daily"],"meta":{"generated_by":"llm_unknown_word","confidence":0.78}}'
         )
         try:
             response = self.llm_gateway.generate(
@@ -154,7 +163,7 @@ class UnknownWordLearner:
                 max_output_tokens=max(1, int(self.config.max_output_tokens)),
             )
             parsed = self._parse_json_object(response.text)
-            normalized = self._normalize_entry_payload(surface=surface, payload=parsed)
+            normalized = self._normalize_entry_payload(surface=surface, payload=parsed, span=span)
             normalized.setdefault('meta', {})
             normalized['meta'].update({
                 'generated_by': 'llm_unknown_word',
@@ -164,13 +173,31 @@ class UnknownWordLearner:
             return normalized
         except Exception as exc:
             LOGGER.warning('unknown_word.llm_failed surface=%s error=%s', surface, exc)
-            return self._fallback_entry_payload(surface=surface, pos_hint=span.pos_hint, reason='llm_failed')
+            return self._fallback_entry_payload(
+                surface=surface,
+                pos_hint=span.pos_hint,
+                proper_noun_candidate=bool(span.proper_noun_candidate),
+                named_entity_type_hint=span.named_entity_type_hint,
+                reason='llm_failed',
+            )
 
-    def _fallback_entry_payload(self, *, surface: str, pos_hint: str, reason: str) -> Dict[str, Any]:
+    def _fallback_entry_payload(
+        self,
+        *,
+        surface: str,
+        pos_hint: str,
+        proper_noun_candidate: bool,
+        named_entity_type_hint: str,
+        reason: str,
+    ) -> Dict[str, Any]:
         normalized_pos = str(pos_hint or 'unknown').strip() or 'unknown'
-        category = 'surface'
-        if normalized_pos in {'adverb', 'noun', 'adjective', 'verb'}:
+        proper_noun = bool(proper_noun_candidate or named_entity_type_hint)
+        category = 'proper_noun' if proper_noun else 'surface'
+        if not proper_noun and normalized_pos in {'adverb', 'noun', 'adjective', 'verb'}:
             category = normalized_pos
+        grammar_pos = 'noun' if proper_noun else normalized_pos
+        grammar_sub_pos = 'proper_noun' if proper_noun else ''
+        named_entity_type = str(named_entity_type_hint or ('other' if proper_noun else '')).strip()
         return {
             'word': surface,
             'category': category,
@@ -183,22 +210,28 @@ class UnknownWordLearner:
                 }
             ],
             'grammar': {
-                'pos': normalized_pos,
+                'pos': grammar_pos,
+                'sub_pos': grammar_sub_pos,
                 'can_start': True,
                 'can_end': False,
                 'independent': True,
                 'content_word': True,
                 'function_word': False,
+                'proper_noun': proper_noun,
+                'named_entity_type': named_entity_type,
             },
             'style_tags': [],
             'meta': {
                 'generated_by': 'fallback_unknown_word',
                 'reason': reason,
+                'proper_noun_candidate': proper_noun_candidate,
+                'named_entity_type_hint': named_entity_type_hint,
             },
         }
 
-    def _normalize_entry_payload(self, *, surface: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+    def _normalize_entry_payload(self, *, surface: str, payload: Mapping[str, Any], span: UnknownSpan) -> Dict[str, Any]:
         word = str(payload.get('word', surface)).strip() or surface
+        category = str(payload.get('category', 'surface')).strip() or 'surface'
         grammar = dict(payload.get('grammar', {}) or {})
         grammar.setdefault('pos', 'unknown')
         grammar.setdefault('can_start', True)
@@ -206,6 +239,33 @@ class UnknownWordLearner:
         grammar.setdefault('independent', True)
         grammar.setdefault('content_word', True)
         grammar.setdefault('function_word', False)
+
+        payload_entity_type = str(
+            payload.get('named_entity_type', '')
+            or grammar.get('named_entity_type', '')
+            or span.named_entity_type_hint
+            or ''
+        ).strip()
+        proper_noun = bool(
+            payload.get('proper_noun', False)
+            or grammar.get('proper_noun', False)
+            or category == 'proper_noun'
+            or str(grammar.get('sub_pos', '')).strip() == 'proper_noun'
+            or payload_entity_type
+            or span.proper_noun_candidate
+        )
+
+        if proper_noun:
+            category = 'proper_noun'
+            grammar['pos'] = 'noun'
+            grammar['sub_pos'] = 'proper_noun'
+            grammar['proper_noun'] = True
+            grammar['named_entity_type'] = payload_entity_type or 'other'
+            grammar['content_word'] = True
+            grammar['function_word'] = False
+        else:
+            grammar['proper_noun'] = False
+            grammar['named_entity_type'] = ''
 
         surface_forms = list(payload.get('surface_forms', []) or [])
         if not surface_forms:
@@ -233,10 +293,13 @@ class UnknownWordLearner:
         meta = dict(payload.get('meta', {}) or {})
         meta.setdefault('source_surface', surface)
         meta.setdefault('generated_by', 'llm_unknown_word')
+        meta.setdefault('proper_noun_candidate', bool(span.proper_noun_candidate))
+        if span.named_entity_type_hint:
+            meta.setdefault('named_entity_type_hint', span.named_entity_type_hint)
 
         return {
             'word': word,
-            'category': str(payload.get('category', 'surface') or 'surface'),
+            'category': category,
             'aliases': aliases,
             'surface_forms': normalized_surface_forms,
             'grammar': grammar,
