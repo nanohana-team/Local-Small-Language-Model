@@ -9,6 +9,23 @@ learning:
   seed_text: "こんにちは。今日はどんな一日になりそうですか。"
   runtime:
     policy_memory_limit: 4
+  action_bandit:
+    enabled: true
+    temperature: 0.85
+    explore_top_k: 3
+    scorer_weight: 0.58
+    teacher_weight: 0.18
+    learned_weight: 0.18
+    uncertainty_weight: 0.06
+    reward_ema_alpha: 0.30
+    default_value: 0.50
+    min_probability: 0.02
+    context_value_slots:
+      - topic
+      - predicate
+      - target
+      - actor
+      - state
   reward_aggregator:
     alpha: 0.8
     beta: 0.2

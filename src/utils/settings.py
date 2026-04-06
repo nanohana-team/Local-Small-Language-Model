@@ -16,6 +16,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         'trace_dir': 'runtime/traces',
         'dataset_dir': 'runtime/datasets',
         'policy_memory': 'runtime/policy_memory.json',
+        'action_bandit': 'runtime/action_bandit.json',
     },
     'pipeline': {
         'intent_planner': {
@@ -104,6 +105,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         'seed_text': 'こんにちは。今日はどんな一日になりそうですか。',
         'runtime': {
             'policy_memory_limit': 4,
+        },
+        'action_bandit': {
+            'enabled': True,
+            'temperature': 0.85,
+            'explore_top_k': 3,
+            'scorer_weight': 0.58,
+            'teacher_weight': 0.18,
+            'learned_weight': 0.18,
+            'uncertainty_weight': 0.06,
+            'reward_ema_alpha': 0.30,
+            'default_value': 0.50,
+            'min_probability': 0.02,
+            'context_value_slots': ['topic', 'predicate', 'target', 'actor', 'state'],
         },
         'reward_aggregator': {
             'alpha': 0.8,

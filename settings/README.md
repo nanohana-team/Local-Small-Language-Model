@@ -9,7 +9,7 @@
 
 ## learning.yaml
 - learn / auto-learn の既定値
-- reward / policy memory / teacher guidance の数値
+- reward / policy memory / teacher guidance / action_bandit の数値
 - target / evaluator / input generator の LLM 数値
 
 ## 反映優先順位

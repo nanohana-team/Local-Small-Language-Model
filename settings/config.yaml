@@ -3,6 +3,7 @@ paths:
   trace_dir: runtime/traces
   dataset_dir: runtime/datasets
   policy_memory: runtime/policy_memory.json
+  action_bandit: runtime/action_bandit.json
 
 llm-api-order:
   - gemini-2.5-flash-lite

@@ -36,6 +36,7 @@ from src.core.schema import (
 )
 from src.core.slots.slot_filler import SlotFillerConfig, fill_slots
 from src.core.surface.surface_realizer import SurfaceRealizerConfig, realize_surface
+from src.training.action_bandit import ActionBanditConfig, ActionBanditStore
 from src.training.external_evaluator import BaseExternalEvaluator, HeuristicExternalEvaluatorConfig, LLMExternalEvaluatorConfig, build_external_evaluator
 from src.training.policy_memory import PolicyMemoryConfig, PolicyMemoryStore
 from src.training.reward_aggregator import RewardAggregator, RewardAggregatorConfig
@@ -57,6 +58,8 @@ class LearningRuntimeConfig:
     dataset_latest_name: str = 'latest_dataset.jsonl'
     policy_memory_path: str = 'runtime/policy_memory.json'
     use_policy_memory: bool = True
+    action_bandit_path: str = 'runtime/action_bandit.json'
+    use_action_bandit: bool = True
     policy_memory_limit: int = 4
     teacher_target_weight: float = 0.35
 
@@ -109,6 +112,7 @@ def build_learning_dataset_record(trace: TraceLog, generated_target: GeneratedTa
         'reward': dataclass_to_dict(trace.reward),
         'evaluation': [dataclass_to_dict(item) for item in trace.evaluation],
         'teacher_guidance': dict(trace.debug.get('teacher_guidance', {}) or {}),
+        'action_bandit': dict(trace.debug.get('action_bandit', {}) or {}),
         'policy_memory': list(trace.debug.get('policy_memory_matches', []) or []),
     }
 
@@ -150,6 +154,7 @@ def run_learning_episode(
     session_id: str = '',
     policy_memory: PolicyMemoryStore | None = None,
     teacher_reranker: TeacherGuidedReranker | None = None,
+    action_bandit: ActionBanditStore | None = None,
 ) -> LearningEpisodeResult:
     settings = load_settings()
     runtime_config = runtime_config or LearningRuntimeConfig()
@@ -172,6 +177,10 @@ def run_learning_episode(
     policy_memory_config = build_dataclass_config(PolicyMemoryConfig, get_setting(settings, 'policy_memory', default={}))
     if runtime_config.use_policy_memory and policy_memory is None:
         policy_memory = PolicyMemoryStore(runtime_config.policy_memory_path, config=policy_memory_config, autoload=True)
+
+    action_bandit_config = build_dataclass_config(ActionBanditConfig, get_setting(settings, 'learning', 'action_bandit', default={}))
+    if runtime_config.use_action_bandit and action_bandit is None:
+        action_bandit = ActionBanditStore(runtime_config.action_bandit_path, config=action_bandit_config, autoload=True)
 
     session_id = session_id or new_session_id('learnsess')
     turn_id = new_turn_id('learnturn')
@@ -294,8 +303,40 @@ def run_learning_episode(
     )
 
     response = base_response
-    if teacher_guidance.overridden and 0 <= teacher_guidance.selected_index < len(scored_candidates):
-        selected_candidate = scored_candidates[teacher_guidance.selected_index]
+    bandit_decision_debug: Dict[str, object] = {}
+    bandit_path: Optional[Path] = None
+    selected_candidate_index = max(
+        range(len(scored_candidates)),
+        key=lambda idx: float(scored_candidates[idx].final_score),
+    ) if scored_candidates else 0
+
+    if runtime_config.use_action_bandit and action_bandit is not None and scored_candidates:
+        bandit_decision = action_bandit.choose_surface_candidate(
+            intent_plan=intent_plan,
+            filled_slots=filled_slots,
+            candidates=scored_candidates,
+            teacher_guidance=teacher_guidance,
+        )
+        bandit_decision_debug = bandit_decision.to_debug_dict()
+        selected_candidate_index = max(0, min(len(scored_candidates) - 1, int(bandit_decision.selected_index)))
+        selected_candidate = scored_candidates[selected_candidate_index]
+        response, _ = choose_best_response(
+            input_state=input_state,
+            intent_plan=intent_plan,
+            filled_slots=filled_slots,
+            candidates=[selected_candidate],
+            config=scorer_config,
+            recent_texts=recent_response_texts,
+        )
+        LOGGER.info(
+            'learning_episode.bandit_selected episode_id=%s selected=%s template_id=%s',
+            episode_id,
+            response.text,
+            selected_candidate.template_id,
+        )
+    elif teacher_guidance.overridden and 0 <= teacher_guidance.selected_index < len(scored_candidates):
+        selected_candidate_index = int(teacher_guidance.selected_index)
+        selected_candidate = scored_candidates[selected_candidate_index]
         response, _ = choose_best_response(
             input_state=input_state,
             intent_plan=intent_plan,
@@ -322,6 +363,7 @@ def run_learning_episode(
         'target_source': generated_target.source,
         'target_model': generated_target.model,
         'teacher_guidance': dataclass_to_dict(teacher_guidance),
+        'action_bandit': dict(bandit_decision_debug or {}),
     }
     evaluation = [
         external_evaluator.evaluate(
@@ -341,6 +383,11 @@ def run_learning_episode(
         scored_candidates=scored_candidates,
         response=response,
     )
+    if actions and bandit_decision_debug:
+        for action in actions:
+            if action.stage == 'surface' and action.action_type == 'choose_surface_candidate':
+                action.metadata['action_bandit'] = dict(bandit_decision_debug)
+                break
     dialogue_state_after = build_dialogue_state_after(
         dialogue_state=dialogue_state_before,
         intent_plan=intent_plan,
@@ -373,6 +420,17 @@ def run_learning_episode(
         )
         policy_memory_path = policy_memory.save()
         LOGGER.info('learning_episode.policy_memory_saved path=%s episode_id=%s', policy_memory_path, episode_id)
+
+    if runtime_config.use_action_bandit and action_bandit is not None and response.chosen_candidate is not None:
+        action_bandit.update(
+            context_key=str(bandit_decision_debug.get('context_key', '')) or action_bandit.build_context_key(intent_plan=intent_plan, filled_slots=filled_slots),
+            candidate=response.chosen_candidate,
+            reward_total=reward.total,
+            reward_internal=reward.internal.total,
+            reward_external=reward.external.total,
+        )
+        bandit_path = action_bandit.save()
+        LOGGER.info('learning_episode.action_bandit_saved path=%s episode_id=%s', bandit_path, episode_id)
 
     trace = TraceLog(
         session_id=session_id,
@@ -408,6 +466,9 @@ def run_learning_episode(
             'teacher_target': dataclass_to_dict(generated_target),
             'teacher_guidance': dataclass_to_dict(teacher_guidance),
             'base_response_text': base_response.text,
+            'selected_candidate_index': selected_candidate_index,
+            'action_bandit': dict(bandit_decision_debug or {}),
+            'action_bandit_path': str(bandit_path) if bandit_path else '',
             'policy_memory_matches': policy_memory_matches,
             'policy_memory_path': str(policy_memory_path) if policy_memory_path else '',
         },

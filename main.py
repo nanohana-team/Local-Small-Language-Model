@@ -25,7 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--lexicon', default=None)
     parser.add_argument('--trace-dir', default=None)
     parser.add_argument('--policy-memory', default=None)
+    parser.add_argument('--action-bandit', default=None)
     parser.add_argument('--no-policy-memory', action='store_true')
+    parser.add_argument('--no-action-bandit', action='store_true')
     parser.add_argument('--no-trace', action='store_true')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--text', default='')
@@ -58,6 +60,7 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
             ('lexicon', ('paths', 'lexicon'), 'libs/dict.lsdx'),
             ('trace_dir', ('paths', 'trace_dir'), 'runtime/traces'),
             ('policy_memory', ('paths', 'policy_memory'), 'runtime/policy_memory.json'),
+            ('action_bandit', ('paths', 'action_bandit'), 'runtime/action_bandit.json'),
             ('dataset_dir', ('paths', 'dataset_dir'), 'runtime/datasets'),
             ('episodes', ('learning', 'episodes'), 1),
             ('target_mode', ('learning', 'target_mode'), 'llm'),
@@ -119,6 +122,7 @@ def build_learning_args(args: argparse.Namespace) -> list[str]:
         '--trace-dir', args.trace_dir,
         '--dataset-dir', args.dataset_dir,
         '--policy-memory', args.policy_memory,
+        '--action-bandit', args.action_bandit,
         '--episodes', str(max(1, int(args.episodes))),
         '--target-mode', args.target_mode,
         '--external-mode', args.external_mode,
@@ -133,6 +137,8 @@ def build_learning_args(args: argparse.Namespace) -> list[str]:
         argv.append('--no-trace')
     if args.no_policy_memory:
         argv.append('--no-policy-memory')
+    if args.no_action_bandit:
+        argv.append('--no-action-bandit')
     if args.no_dataset:
         argv.append('--no-dataset')
     if args.debug:
@@ -152,6 +158,7 @@ def build_auto_learning_args(args: argparse.Namespace) -> list[str]:
         '--trace-dir', args.trace_dir,
         '--dataset-dir', args.dataset_dir,
         '--policy-memory', args.policy_memory,
+        '--action-bandit', args.action_bandit,
         '--episodes', str(max(1, int(args.episodes))),
         '--target-mode', args.target_mode,
         '--external-mode', args.external_mode,
@@ -170,6 +177,8 @@ def build_auto_learning_args(args: argparse.Namespace) -> list[str]:
         argv.append('--no-trace')
     if args.no_policy_memory:
         argv.append('--no-policy-memory')
+    if args.no_action_bandit:
+        argv.append('--no-action-bandit')
     if args.no_dataset:
         argv.append('--no-dataset')
     if args.debug:

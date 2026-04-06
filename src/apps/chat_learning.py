@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 from src.apps.run_minimal_chat import SurfaceNormalizer
 from src.core.io.lsd_lexicon import load_lexicon_container
 from src.core.schema import DialogueState, LexiconContainer, new_session_id
+from src.training.action_bandit import ActionBanditConfig, ActionBanditStore
 from src.training.external_evaluator import HeuristicExternalEvaluatorConfig, LLMExternalEvaluatorConfig, build_external_evaluator
 from src.training.learning_central import LearningRuntimeConfig, run_learning_episode
 from src.training.policy_memory import PolicyMemoryConfig, PolicyMemoryStore
@@ -26,7 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--trace-dir', default=None)
     parser.add_argument('--dataset-dir', default=None)
     parser.add_argument('--policy-memory', default=None)
+    parser.add_argument('--action-bandit', default=None)
     parser.add_argument('--no-policy-memory', action='store_true')
+    parser.add_argument('--no-action-bandit', action='store_true')
     parser.add_argument('--no-trace', action='store_true')
     parser.add_argument('--no-dataset', action='store_true')
     parser.add_argument('--debug', action='store_true')
@@ -53,6 +56,7 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
             ('trace_dir', ('paths', 'trace_dir'), 'runtime/traces'),
             ('dataset_dir', ('paths', 'dataset_dir'), 'runtime/datasets'),
             ('policy_memory', ('paths', 'policy_memory'), 'runtime/policy_memory.json'),
+            ('action_bandit', ('paths', 'action_bandit'), 'runtime/action_bandit.json'),
             ('episodes', ('learning', 'episodes'), 1),
             ('target_mode', ('learning', 'target_mode'), 'llm'),
             ('external_mode', ('learning', 'external_mode'), 'llm'),
@@ -96,6 +100,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         save_dataset=not args.no_dataset,
         policy_memory_path=args.policy_memory,
         use_policy_memory=not args.no_policy_memory,
+        action_bandit_path=args.action_bandit,
+        use_action_bandit=not args.no_action_bandit,
         policy_memory_limit=max(1, int(get_setting(settings, 'learning', 'runtime', 'policy_memory_limit', default=4))),
         teacher_target_weight=float(args.teacher_target_weight),
     )
@@ -120,10 +126,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     policy_memory = None
+    action_bandit = None
     if runtime_config.use_policy_memory:
         policy_memory = PolicyMemoryStore(
             runtime_config.policy_memory_path,
             config=build_dataclass_config(PolicyMemoryConfig, get_setting(settings, 'policy_memory', default={})),
+            autoload=True,
+        )
+    if runtime_config.use_action_bandit:
+        action_bandit = ActionBanditStore(
+            runtime_config.action_bandit_path,
+            config=build_dataclass_config(ActionBanditConfig, get_setting(settings, 'learning', 'action_bandit', default={})),
             autoload=True,
         )
     teacher_reranker = TeacherGuidedReranker(
@@ -148,6 +161,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             session_id=session_id,
             policy_memory=policy_memory,
             teacher_reranker=teacher_reranker,
+            action_bandit=action_bandit,
         )
         dialogue_state = result.next_dialogue_state or dialogue_state
         print(result.response_text)
