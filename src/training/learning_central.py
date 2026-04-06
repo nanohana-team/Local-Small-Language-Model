@@ -235,6 +235,7 @@ def run_learning_episode(
 
     policy_memory_matches: List[Dict[str, object]] = []
     memory_candidates: List[RealizationCandidate] = []
+    recent_response_texts: List[str] = []
     if runtime_config.use_policy_memory and policy_memory is not None:
         memory_candidates, policy_memory_matches = policy_memory.suggest(
             intent_plan=intent_plan,
@@ -242,6 +243,7 @@ def run_learning_episode(
             existing_texts=[item.text for item in base_candidates],
             limit=max(1, int(runtime_config.policy_memory_limit)),
         )
+        recent_response_texts = policy_memory.recent_texts(limit=8, source='selected_response')
         if memory_candidates:
             LOGGER.info(
                 'learning_episode.policy_memory_augmented episode_id=%s count=%s',
@@ -257,6 +259,7 @@ def run_learning_episode(
         filled_slots=filled_slots,
         candidates=merged_candidates,
         config=scorer_config,
+        recent_texts=recent_response_texts,
     )
 
     used_slots_for_target = _filled_slot_strings(filled_slots)
@@ -273,6 +276,7 @@ def run_learning_episode(
     teacher_guidance = teacher_reranker.rerank(
         candidates=scored_candidates,
         target_text=generated_target.text,
+        filled_slots=filled_slots,
     )
 
     response = base_response
@@ -284,6 +288,7 @@ def run_learning_episode(
             filled_slots=filled_slots,
             candidates=[selected_candidate],
             config=scorer_config,
+            recent_texts=recent_response_texts,
         )
         LOGGER.info(
             'learning_episode.teacher_override episode_id=%s old=%s new=%s',

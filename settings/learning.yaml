@@ -16,6 +16,9 @@ learning:
     neutral_external_score: 0.5
     use_power_transform: false
     external_power: 1.5
+    mismatch_internal_threshold: 0.8
+    mismatch_external_threshold: 0.2
+    mismatch_penalty: 0.18
 
 policy_memory:
   min_match_score: 0.34
@@ -25,12 +28,18 @@ policy_memory:
   response_reward_scale: 0.6
   teacher_source_bonus: 0.08
   response_source_bonus: 0.03
+  selected_response_hard_reject_external: 0.2
+  selected_response_min_reward_total: 0.35
+  selected_response_low_external_threshold: 0.45
+  selected_response_low_external_scale: 0.2
 
 teacher_guidance:
   target_weight: 0.35
   min_override_delta: 0.015
   min_alignment_gain: 0.05
   max_blended_regression: 0.01
+  min_override_alignment: 0.5
+  max_slot_score_regression: 0.2
 
 llm:
   target_generation:

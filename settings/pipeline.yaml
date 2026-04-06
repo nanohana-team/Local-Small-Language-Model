@@ -61,3 +61,8 @@ pipeline:
     policy_memory_teacher_bonus: 0.22
     policy_memory_response_bonus: 0.10
     policy_memory_retention_floor: 0.75
+    diversity_exact_match_penalty: 0.18
+    diversity_similarity_penalty: 0.10
+    diversity_similarity_threshold: 0.82
+    diversity_frequency_bonus_penalty: 0.04
+    diversity_frequency_cap: 0.24

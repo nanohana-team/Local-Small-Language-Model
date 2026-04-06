@@ -30,6 +30,11 @@ class BasicScorerConfig:
     policy_memory_teacher_bonus: float = 0.22
     policy_memory_response_bonus: float = 0.10
     policy_memory_retention_floor: float = 0.75
+    diversity_exact_match_penalty: float = 0.18
+    diversity_similarity_penalty: float = 0.10
+    diversity_similarity_threshold: float = 0.82
+    diversity_frequency_bonus_penalty: float = 0.04
+    diversity_frequency_cap: float = 0.24
 
 
 class BasicScorer:
@@ -47,6 +52,7 @@ class BasicScorer:
         intent_plan: IntentPlan,
         filled_slots: FilledSlots,
         candidates: Sequence[RealizationCandidate],
+        recent_texts: Sequence[str] | None = None,
     ) -> Tuple[ResponseResult, List[RealizationCandidate]]:
         LOGGER.debug(
             "basic_scorer.start intent=%s policy=%s candidate_count=%s input_tokens=%s filled_slots=%s missing_required=%s config=%s",
@@ -76,6 +82,7 @@ class BasicScorer:
                 input_state=input_state,
                 intent_plan=intent_plan,
                 filled_slots=filled_slots,
+                recent_texts=recent_texts,
             )
             response = self._build_response_result(
                 intent_plan=intent_plan,
@@ -102,6 +109,7 @@ class BasicScorer:
                 input_state=input_state,
                 intent_plan=intent_plan,
                 filled_slots=filled_slots,
+                recent_texts=recent_texts,
             )
             scored_candidates.append(scored_candidate)
 
@@ -161,6 +169,7 @@ class BasicScorer:
         input_state: InputState,
         intent_plan: IntentPlan,
         filled_slots: FilledSlots,
+        recent_texts: Sequence[str] | None = None,
     ) -> Tuple[RealizationCandidate, ScoreBreakdown]:
         LOGGER.debug(
             "basic_scorer.score_candidate.start text=%s template_id=%s token_sequence=%s grammar_violations=%s slot_coverage=%.6f semantic_score=%.6f",
@@ -191,15 +200,18 @@ class BasicScorer:
             + weighted_retention
             + weighted_policy
         )
+        diversity_penalty = self._score_diversity_penalty(candidate, recent_texts)
+        total -= diversity_penalty
 
         LOGGER.debug(
-            "basic_scorer.score_candidate.weighted text=%s weighted_semantic=%.6f weighted_slot=%.6f weighted_grammar=%.6f weighted_retention=%.6f weighted_policy=%.6f total_before_clamp=%.6f",
+            "basic_scorer.score_candidate.weighted text=%s weighted_semantic=%.6f weighted_slot=%.6f weighted_grammar=%.6f weighted_retention=%.6f weighted_policy=%.6f diversity_penalty=%.6f total_before_clamp=%.6f",
             candidate.text,
             weighted_semantic,
             weighted_slot,
             weighted_grammar,
             weighted_retention,
             weighted_policy,
+            diversity_penalty,
             total,
         )
 
@@ -211,6 +223,7 @@ class BasicScorer:
             grammar_fitness=grammar_fitness,
             input_retention=input_retention,
             policy_fitness=policy_fitness,
+            diversity_penalty=diversity_penalty,
         )
 
         clamped_total = max(0.0, min(1.0, total))
@@ -628,6 +641,69 @@ class BasicScorer:
     def _is_policy_memory_response_candidate(self, candidate: RealizationCandidate) -> bool:
         return str(candidate.template_id or '').startswith('policy_memory_selected_response')
 
+    def _score_diversity_penalty(
+        self,
+        candidate: RealizationCandidate,
+        recent_texts: Sequence[str] | None,
+    ) -> float:
+        normalized_candidate = self._normalize_text(candidate.text)
+        if not normalized_candidate or not recent_texts:
+            return 0.0
+
+        normalized_recent = [self._normalize_text(text) for text in recent_texts if self._normalize_text(text)]
+        if not normalized_recent:
+            return 0.0
+
+        exact_hits = sum(1 for text in normalized_recent if text == normalized_candidate)
+        penalty = 0.0
+        if exact_hits > 0:
+            penalty = float(self.config.diversity_exact_match_penalty)
+            penalty += min(
+                float(self.config.diversity_frequency_cap),
+                max(0, exact_hits - 1) * float(self.config.diversity_frequency_bonus_penalty),
+            )
+
+        similarity_threshold = float(self.config.diversity_similarity_threshold)
+        for recent_text in normalized_recent:
+            similarity = self._bigram_jaccard(normalized_candidate, recent_text)
+            if similarity >= similarity_threshold:
+                penalty = max(
+                    penalty,
+                    min(
+                        float(self.config.diversity_frequency_cap),
+                        float(self.config.diversity_similarity_penalty) * similarity,
+                    ),
+                )
+
+        final_penalty = self._clamp01(penalty)
+        LOGGER.debug(
+            "basic_scorer.score_diversity_penalty text=%s exact_hits=%s penalty=%.6f recent=%s",
+            candidate.text,
+            exact_hits,
+            final_penalty,
+            normalized_recent,
+        )
+        return final_penalty
+
+    def _normalize_text(self, text: str) -> str:
+        return str(text or '').strip().rstrip('。？！!?')
+
+    def _bigram_jaccard(self, left: str, right: str) -> float:
+        left_bigrams = self._char_bigrams(left)
+        right_bigrams = self._char_bigrams(right)
+        if not left_bigrams or not right_bigrams:
+            return 0.0
+        intersection = len(left_bigrams & right_bigrams)
+        union = len(left_bigrams | right_bigrams)
+        if union <= 0:
+            return 0.0
+        return intersection / float(union)
+
+    def _char_bigrams(self, text: str) -> set[str]:
+        if len(text) < 2:
+            return {text} if text else set()
+        return {text[index:index + 2] for index in range(len(text) - 1)}
+
     def _build_reasons(
         self,
         candidate: RealizationCandidate,
@@ -637,6 +713,7 @@ class BasicScorer:
         grammar_fitness: float,
         input_retention: float,
         policy_fitness: float,
+        diversity_penalty: float = 0.0,
     ) -> List[str]:
         reasons: List[str] = []
         LOGGER.debug(
@@ -671,6 +748,10 @@ class BasicScorer:
 
         if policy_fitness >= 0.75:
             reasons.append("policy_fit_good")
+        if diversity_penalty >= self.config.diversity_exact_match_penalty:
+            reasons.append("diversity_penalty_exact_repeat")
+        elif diversity_penalty > 0.0:
+            reasons.append("diversity_penalty_similar_recent")
         if self._is_policy_memory_candidate(candidate):
             reasons.append("policy_memory_candidate")
 
@@ -775,6 +856,7 @@ def choose_best_response(
     filled_slots: FilledSlots,
     candidates: Sequence[RealizationCandidate],
     config: Optional[BasicScorerConfig] = None,
+    recent_texts: Sequence[str] | None = None,
 ) -> Tuple[ResponseResult, List[RealizationCandidate]]:
     scorer = BasicScorer(config=config)
     return scorer.choose_best(

@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, List, Mapping, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from src.core.schema import FilledSlots, IntentPlan, RealizationCandidate
@@ -65,6 +65,10 @@ class PolicyMemoryConfig:
     response_reward_scale: float = 0.6
     teacher_source_bonus: float = 0.08
     response_source_bonus: float = 0.03
+    selected_response_hard_reject_external: float = 0.20
+    selected_response_min_reward_total: float = 0.35
+    selected_response_low_external_threshold: float = 0.45
+    selected_response_low_external_scale: float = 0.20
 
 
 class PolicyMemoryStore:
@@ -138,10 +142,10 @@ class PolicyMemoryStore:
         external_score: float,
         source: str,
         template_id: str = '',
-    ) -> None:
+    ) -> bool:
         cleaned_text = self._normalize_text(text)
         if not cleaned_text:
-            return
+            return False
 
         slot_signature = self._stable_slots(slots)
         reward_total = max(0.0, min(1.0, float(reward_total)))
@@ -150,8 +154,28 @@ class PolicyMemoryStore:
 
         source_scale = self.config.teacher_reward_scale if source == 'teacher_target' else self.config.response_reward_scale
         blended_weight = max(0.0, min(1.0, reward_total * source_scale))
-        now = datetime.now(JST).isoformat(timespec='seconds')
 
+        if source == 'selected_response':
+            if external_score <= float(self.config.selected_response_hard_reject_external):
+                LOGGER.info(
+                    'policy_memory.remember_skipped source=%s reason=hard_low_external external=%.4f text=%s',
+                    source,
+                    external_score,
+                    cleaned_text,
+                )
+                return False
+            if reward_total < float(self.config.selected_response_min_reward_total):
+                LOGGER.info(
+                    'policy_memory.remember_skipped source=%s reason=low_reward_total reward_total=%.4f text=%s',
+                    source,
+                    reward_total,
+                    cleaned_text,
+                )
+                return False
+            if external_score < float(self.config.selected_response_low_external_threshold):
+                blended_weight *= max(0.0, min(1.0, float(self.config.selected_response_low_external_scale)))
+
+        now = datetime.now(JST).isoformat(timespec='seconds')
         existing = self._find_record(intent=intent, slots=slot_signature, text=cleaned_text, source=source)
         if existing is None:
             self.records.append(
@@ -182,6 +206,7 @@ class PolicyMemoryStore:
                 existing.template_id = template_id
 
         self._trim_records(intent=intent, slots=slot_signature)
+        return True
 
     def suggest(
         self,
@@ -236,6 +261,16 @@ class PolicyMemoryStore:
             )
 
         return candidates, debug
+
+    def recent_texts(self, *, limit: int = 8, source: str = 'selected_response') -> List[str]:
+        records = [record for record in self.records if record.source == source and record.text]
+        records.sort(key=lambda item: (item.updated_at, item.created_at, item.count), reverse=True)
+        results: List[str] = []
+        for record in records:
+            results.append(self._normalize_text(record.text))
+            if len(results) >= max(1, int(limit)):
+                break
+        return results
 
     def _rank_matches(self, *, intent: str, slots: Mapping[str, str]) -> List[PolicyMemoryMatch]:
         matches: List[PolicyMemoryMatch] = []

@@ -21,6 +21,9 @@ class RewardAggregatorConfig:
     neutral_external_score: float = 0.5
     use_power_transform: bool = False
     external_power: float = 1.5
+    mismatch_internal_threshold: float = 0.80
+    mismatch_external_threshold: float = 0.20
+    mismatch_penalty: float = 0.18
 
 
 class RewardAggregator:
@@ -37,12 +40,22 @@ class RewardAggregator:
         internal = self._build_internal(response)
         external = self._build_external(internal=internal, evaluation=evaluation_list)
         alpha, beta = self._normalized_weights(self.config.alpha, self.config.beta)
-        total = max(0.0, min(1.0, alpha * internal.total + beta * external.total))
-
+        raw_total = alpha * internal.total + beta * external.total
+        mismatch_penalty_applied = 0.0
         reasons = list(internal.reasons)
         for component in external.components:
             suffix = f"{component.evaluator_name}:{component.label}" if component.label else component.evaluator_name
             reasons.append(f"external:{suffix}")
+
+        if (
+            internal.total >= float(self.config.mismatch_internal_threshold)
+            and external.total <= float(self.config.mismatch_external_threshold)
+        ):
+            mismatch_penalty_applied = max(0.0, float(self.config.mismatch_penalty))
+            raw_total -= mismatch_penalty_applied
+            reasons.append('alignment_mismatch_high_internal_low_external')
+
+        total = max(0.0, min(1.0, raw_total))
 
         return RewardBreakdown(
             internal=internal,
@@ -50,11 +63,14 @@ class RewardAggregator:
             total=total,
             reasons=reasons,
             metadata={
-                "formula": "total = alpha * internal.total + beta * external.total",
+                "formula": "total = alpha * internal.total + beta * external.total - mismatch_penalty",
                 "alpha": alpha,
                 "beta": beta,
                 "fallback_strategy": self.config.fallback_strategy,
                 "use_power_transform": self.config.use_power_transform,
+                "mismatch_internal_threshold": self.config.mismatch_internal_threshold,
+                "mismatch_external_threshold": self.config.mismatch_external_threshold,
+                "mismatch_penalty_applied": mismatch_penalty_applied,
                 "response_text": response.text,
                 "intent": response.intent,
                 "policy": response.policy,

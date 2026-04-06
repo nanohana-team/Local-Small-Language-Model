@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Sequence
 
-from src.core.schema import RealizationCandidate
+from src.core.schema import FilledSlots, RealizationCandidate
 
 _PUNCT_RE = re.compile(r'[\s、。？！!?,，．・「」『』（）()\[\]{}]+')
 
@@ -15,6 +15,8 @@ class TeacherGuidanceConfig:
     min_override_delta: float = 0.015
     min_alignment_gain: float = 0.05
     max_blended_regression: float = 0.01
+    min_override_alignment: float = 0.50
+    max_slot_score_regression: float = 0.20
 
 
 @dataclass(slots=True)
@@ -24,6 +26,7 @@ class TeacherCandidateRank:
     base_score: float
     target_alignment: float
     blended_score: float
+    slot_score: float = 0.0
 
 
 @dataclass(slots=True)
@@ -31,6 +34,8 @@ class TeacherGuidanceResult:
     selected_index: int = 0
     selected_text: str = ''
     overridden: bool = False
+    guard_blocked: bool = False
+    guard_reason: str = ''
     rankings: List[TeacherCandidateRank] = field(default_factory=list)
 
 
@@ -43,6 +48,7 @@ class TeacherGuidedReranker:
         *,
         candidates: Sequence[RealizationCandidate],
         target_text: str,
+        filled_slots: FilledSlots | None = None,
     ) -> TeacherGuidanceResult:
         if not candidates:
             return TeacherGuidanceResult()
@@ -60,6 +66,7 @@ class TeacherGuidedReranker:
                         base_score=float(item.final_score),
                         target_alignment=0.0,
                         blended_score=float(item.final_score),
+                        slot_score=self._slot_alignment_score(item.text, filled_slots),
                     )
                     for index, item in enumerate(candidates)
                 ],
@@ -77,6 +84,7 @@ class TeacherGuidedReranker:
                     base_score=float(item.final_score),
                     target_alignment=alignment,
                     blended_score=blended,
+                    slot_score=self._slot_alignment_score(item.text, filled_slots),
                 )
             )
 
@@ -94,6 +102,7 @@ class TeacherGuidedReranker:
                 base_score=float(candidates[base_index].final_score),
                 target_alignment=self._alignment_score(candidates[base_index].text, cleaned_target),
                 blended_score=float(candidates[base_index].final_score),
+                slot_score=self._slot_alignment_score(candidates[base_index].text, filled_slots),
             )
 
         blended_gain = selected.blended_score - base_ranking.blended_score
@@ -104,6 +113,24 @@ class TeacherGuidedReranker:
             and selected.blended_score >= (base_ranking.blended_score - float(self.config.max_blended_regression))
         )
         overridden = selected.index != base_index and (has_enough_blended_gain or has_alignment_win)
+        guard_blocked = False
+        guard_reason = ''
+
+        if overridden:
+            has_alignment_floor = selected.target_alignment >= float(self.config.min_override_alignment)
+            keeps_slot_structure = (
+                selected.slot_score + float(self.config.max_slot_score_regression)
+                >= base_ranking.slot_score
+            )
+            if not has_alignment_floor:
+                overridden = False
+                guard_blocked = True
+                guard_reason = 'override_alignment_below_floor'
+            elif not keeps_slot_structure:
+                overridden = False
+                guard_blocked = True
+                guard_reason = 'override_slot_regression'
+
         final_index = selected.index if overridden else base_index
         final_text = candidates[final_index].text
 
@@ -111,6 +138,8 @@ class TeacherGuidedReranker:
             selected_index=final_index,
             selected_text=final_text,
             overridden=overridden,
+            guard_blocked=guard_blocked,
+            guard_reason=guard_reason,
             rankings=rankings,
         )
 
@@ -127,6 +156,27 @@ class TeacherGuidedReranker:
         length_score = self._length_score(normalized_text, normalized_target)
         score = (token_score * 0.45) + (bigram_score * 0.45) + (length_score * 0.10)
         return max(0.0, min(1.0, score))
+
+    def _slot_alignment_score(self, text: str, filled_slots: FilledSlots | None) -> float:
+        if filled_slots is None:
+            return 0.0
+        normalized_text = self._normalize_text(text)
+        if not normalized_text:
+            return 0.0
+
+        values = [
+            self._normalize_text(slot.value)
+            for slot in filled_slots.values.values()
+            if self._normalize_text(slot.value)
+        ]
+        if not values:
+            return 0.0
+
+        hits = 0
+        for value in values:
+            if value in normalized_text:
+                hits += 1
+        return hits / float(len(values))
 
     def _normalize_text(self, text: str) -> str:
         return _PUNCT_RE.sub('', str(text or '')).strip()
