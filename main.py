@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from src.apps.run_minimal_chat import (
+    SurfaceNormalizer,
     parse_args as parse_minimal_args,
     run_pipeline,
-    SurfaceNormalizer,
 )
 from src.core.io.lsd_lexicon import load_lexicon_container
 from src.core.schema import LexiconContainer
@@ -20,6 +20,7 @@ LOGGER = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("--mode", choices=["chat", "learn"], default="chat")
     parser.add_argument("--lexicon", default="libs/dict.lsdx")
     parser.add_argument("--trace-dir", default="runtime/traces")
     parser.add_argument("--no-trace", action="store_true")
@@ -27,7 +28,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", default="")
     parser.add_argument("--words", nargs="*", default=None)
 
+    # learning mode options
+    parser.add_argument("--dataset-dir", default="runtime/datasets")
+    parser.add_argument("--no-dataset", action="store_true")
+    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--external-mode", choices=["heuristic", "none"], default="heuristic")
+    parser.add_argument("--alpha", type=float, default=0.8)
+    parser.add_argument("--beta", type=float, default=0.2)
+    parser.add_argument("--external-fallback", choices=["neutral", "internal"], default="neutral")
+    parser.add_argument("--neutral-external-score", type=float, default=0.5)
+
     return parser
+
 
 
 def build_pipeline_args(
@@ -61,17 +73,62 @@ def build_pipeline_args(
     return parse_minimal_args(argv)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
 
-    # --- logging 初期化（1回だけ） ---
+def build_learning_args(args: argparse.Namespace) -> list[str]:
+    argv: list[str] = [
+        "--lexicon",
+        args.lexicon,
+        "--trace-dir",
+        args.trace_dir,
+        "--dataset-dir",
+        args.dataset_dir,
+        "--episodes",
+        str(max(1, int(args.episodes))),
+        "--external-mode",
+        args.external_mode,
+        "--alpha",
+        str(args.alpha),
+        "--beta",
+        str(args.beta),
+        "--external-fallback",
+        args.external_fallback,
+        "--neutral-external-score",
+        str(args.neutral_external_score),
+    ]
+
+    if args.no_trace:
+        argv.append("--no-trace")
+
+    if args.no_dataset:
+        argv.append("--no-dataset")
+
+    if args.debug:
+        argv.append("--debug")
+
+    if args.words:
+        argv.append("--words")
+        argv.extend(args.words)
+    elif args.text:
+        argv.extend(["--text", args.text])
+
+    return argv
+
+
+
+def dispatch_learning_mode(args: argparse.Namespace) -> int:
+    from src.apps.chat_learning import main as chat_learning_main
+
+    learning_argv = build_learning_args(args)
+    return int(chat_learning_main(learning_argv))
+
+
+
+def run_chat_mode(args: argparse.Namespace) -> int:
     setup_logging(
         app_name="lslm",
         console_level=logging.DEBUG if args.debug else logging.INFO,
     )
 
-    # --- 辞書ロード（1回だけ） ---
     lexicon_path = Path(args.lexicon)
     LOGGER.info("lexicon.load.start path=%s", lexicon_path)
 
@@ -82,7 +139,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     normalizer = SurfaceNormalizer(lexicon)
 
-    # --- 単発実行 ---
     if args.text or args.words:
         pipeline_args = build_pipeline_args(
             lexicon=args.lexicon,
@@ -96,7 +152,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(response_text)
         return 0
 
-    # --- 対話ループ ---
     print("LSLM v3 interactive mode")
 
     while True:
@@ -133,6 +188,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except Exception:
             LOGGER.exception("interactive_turn_failed")
             print("[ERROR] 応答生成に失敗しました")
+
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.mode == "learn":
+        return dispatch_learning_mode(args)
+
+    return run_chat_mode(args)
 
 
 if __name__ == "__main__":
