@@ -39,20 +39,18 @@ def _to_jsonable(value: Any) -> Any:
 
 class JsonlTraceLogger:
     """
-    LSLM v3 用の軽量 JSONL ロガー。
+    LSLM v3 用 JSONL トレースロガー。
 
-    方針:
-    - 1行 = 1 JSON
-    - session / turn 単位で追跡
-    - dict / dataclass のどちらでも受け取れる
-    - 起動時に latest を回転可能
+    使い方:
+    - append_trace(trace) で TraceLog / dataclass / dict をそのまま 1 行 JSON に保存
+    - append_event(...) でイベント型ログも追記可能
     """
 
     def __init__(
         self,
-        log_dir: str | Path = "runtime/logs",
+        log_dir: str | Path = "runtime/traces",
         latest_name: str = "latest_trace.jsonl",
-        rotate_on_start: bool = True,
+        rotate_on_start: bool = False,
     ) -> None:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -63,9 +61,7 @@ class JsonlTraceLogger:
             self.rotate_latest()
 
     def rotate_latest(self) -> Path | None:
-        if not self.latest_path.exists():
-            return None
-        if self.latest_path.stat().st_size <= 0:
+        if not self.latest_path.exists() or self.latest_path.stat().st_size <= 0:
             return None
 
         stamp = datetime.now(JST).strftime("%Y%m%d%H%M%S")
@@ -84,11 +80,12 @@ class JsonlTraceLogger:
     def new_turn_id(self) -> str:
         return f"turn_{uuid.uuid4().hex[:12]}"
 
-    def append_record(self, record: Mapping[str, Any]) -> None:
+    def append_record(self, record: Mapping[str, Any]) -> Path:
         jsonable = _to_jsonable(record)
         with self.latest_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(jsonable, ensure_ascii=False, separators=(",", ":")))
             f.write("\n")
+        return self.latest_path
 
     def append_event(
         self,
@@ -97,7 +94,7 @@ class JsonlTraceLogger:
         *,
         session_id: str = "",
         turn_id: str = "",
-    ) -> None:
+    ) -> Path:
         record: dict[str, Any] = {
             "event": event,
             "timestamp": now_jst_iso(),
@@ -108,7 +105,7 @@ class JsonlTraceLogger:
             record["turn_id"] = turn_id
         if payload:
             record.update(_to_jsonable(payload))
-        self.append_record(record)
+        return self.append_record(record)
 
     def start_session(self, extra: Mapping[str, Any] | None = None) -> str:
         session_id = self.new_session_id()
@@ -118,26 +115,17 @@ class JsonlTraceLogger:
         self.append_event("session_start", payload, session_id=session_id)
         return session_id
 
-    def end_session(self, session_id: str, extra: Mapping[str, Any] | None = None) -> None:
+    def end_session(self, session_id: str, extra: Mapping[str, Any] | None = None) -> Path:
         payload = {"status": "ended"}
         if extra:
             payload.update(_to_jsonable(extra))
-        self.append_event("session_end", payload, session_id=session_id)
+        return self.append_event("session_end", payload, session_id=session_id)
 
-    def append_trace(
-        self,
-        trace: Any,
-        *,
-        session_id: str,
-        turn_id: str,
-        event: str = "trace",
-    ) -> None:
-        self.append_event(
-            event,
-            payload={"trace": _to_jsonable(trace)},
-            session_id=session_id,
-            turn_id=turn_id,
-        )
+    def append_trace(self, trace: Any) -> Path:
+        jsonable = _to_jsonable(trace)
+        if isinstance(jsonable, dict) and "timestamp" not in jsonable:
+            jsonable["timestamp"] = now_jst_iso()
+        return self.append_record(jsonable if isinstance(jsonable, dict) else {"trace": jsonable, "timestamp": now_jst_iso()})
 
     def append_error(
         self,
@@ -147,17 +135,11 @@ class JsonlTraceLogger:
         error_type: str,
         message: str,
         detail: Mapping[str, Any] | None = None,
-    ) -> None:
+    ) -> Path:
         payload: dict[str, Any] = {
             "error_type": error_type,
             "message": message,
         }
         if detail:
             payload["detail"] = _to_jsonable(detail)
-
-        self.append_event(
-            "error",
-            payload=payload,
-            session_id=session_id,
-            turn_id=turn_id,
-        )
+        return self.append_event("error", payload=payload, session_id=session_id, turn_id=turn_id)

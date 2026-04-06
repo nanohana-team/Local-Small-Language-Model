@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-import uuid
 
 
 IntentType = Literal[
@@ -85,7 +85,8 @@ class AxisVector:
         }
 
     def ordered_values(self) -> List[float]:
-        return [self.to_dict()[axis] for axis in DEFAULT_SEMANTIC_AXES]
+        data = self.to_dict()
+        return [float(data[axis]) for axis in DEFAULT_SEMANTIC_AXES]
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "AxisVector":
@@ -181,6 +182,27 @@ class RelationEdge:
 
 
 @dataclass(slots=True)
+class SurfaceForm:
+    form: str = ""
+    surface: str = ""
+    tokens: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "SurfaceForm":
+        if not data:
+            return cls()
+        surface = str(data.get("surface", ""))
+        tokens = [str(x) for x in data.get("tokens", [])]
+        if not tokens and surface:
+            tokens = [surface]
+        return cls(
+            form=str(data.get("form", "")),
+            surface=surface,
+            tokens=tokens,
+        )
+
+
+@dataclass(slots=True)
 class LexiconEntry:
     word: str
     category: str
@@ -194,6 +216,13 @@ class LexiconEntry:
     frequency: float = 0.0
     style_tags: List[str] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
+    entry_type: str = "surface"
+    lemma: str = ""
+    stem_id: str = ""
+    conj_class: str = ""
+    effect: Dict[str, Any] = field(default_factory=dict)
+    aliases: List[str] = field(default_factory=list)
+    surface_forms: List[SurfaceForm] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LexiconEntry":
@@ -208,7 +237,29 @@ class LexiconEntry:
             frequency=float(data.get("frequency", 0.0)),
             style_tags=[str(x) for x in data.get("style_tags", [])],
             meta=dict(data.get("meta", {})),
+            entry_type=str(data.get("type", data.get("entry_type", "surface"))),
+            lemma=str(data.get("lemma", data.get("word", ""))),
+            stem_id=str(data.get("stem_id", "")),
+            conj_class=str(data.get("conj_class", "")),
+            effect=dict(data.get("effect", {})),
+            aliases=[str(x) for x in data.get("aliases", [])],
+            surface_forms=[SurfaceForm.from_dict(x) for x in data.get("surface_forms", [])],
         )
+
+    def get_surface(self, preferred_form: str = "plain") -> str:
+        if self.surface_forms:
+            for item in self.surface_forms:
+                if item.form == preferred_form and item.surface:
+                    return item.surface
+            for item in self.surface_forms:
+                if item.form == "plain" and item.surface:
+                    return item.surface
+            for item in self.surface_forms:
+                if item.surface:
+                    return item.surface
+        if self.lemma:
+            return self.lemma
+        return self.word
 
 
 @dataclass(slots=True)
@@ -250,8 +301,8 @@ class LexiconIndexes:
             },
             can_start=[str(x) for x in data.get("can_start", [])],
             can_end=[str(x) for x in data.get("can_end", [])],
-            content_words=[str(x) for x in data.get("content_words", [])],
-            function_words=[str(x) for x in data.get("function_words", [])],
+            content_words=[str(x) for x in data.get("content_words", data.get("content_word", []))],
+            function_words=[str(x) for x in data.get("function_words", data.get("function_word", []))],
             entry_path={
                 str(k): [str(x) for x in v]
                 for k, v in dict(data.get("entry_path", {})).items()
@@ -424,21 +475,14 @@ class TraceLog:
 
 
 def dataclass_to_dict(value: Any) -> Any:
-    """
-    dataclass を JSON 保存しやすい dict/list/primitive に再帰変換する。
-    """
     if is_dataclass(value):
         return asdict(value)
-
     if isinstance(value, dict):
         return {k: dataclass_to_dict(v) for k, v in value.items()}
-
     if isinstance(value, list):
         return [dataclass_to_dict(v) for v in value]
-
     if isinstance(value, tuple):
         return [dataclass_to_dict(v) for v in value]
-
     return value
 
 
@@ -450,9 +494,6 @@ def build_input_state(
     turn_id: str = "",
     timestamp: Optional[str] = None,
 ) -> InputState:
-    """
-    入力処理の最初に使う簡易ヘルパー。
-    """
     return InputState(
         raw_text=raw_text,
         tokens=list(tokens),

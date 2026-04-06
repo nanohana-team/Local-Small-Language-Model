@@ -86,8 +86,9 @@ class SlotFiller:
     }
 
     PREDICATE_POS_PRIORITY: Tuple[str, ...] = (
-        "verb",
+        "interjection",
         "verb_stem",
+        "verb",
         "adjective_i",
         "adjective_na",
         "copula",
