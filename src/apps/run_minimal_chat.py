@@ -4,6 +4,7 @@ import argparse
 import logging
 import sys
 from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -25,7 +26,9 @@ from src.core.schema import (
     RewardBreakdown,
     SlotTrace,
     SlotTraceItem,
+    TokenizationToken,
     TraceLog,
+    UnknownSpan,
     build_input_state,
     build_runtime_state_snapshot,
     dataclass_to_dict,
@@ -36,32 +39,83 @@ from src.core.schema import (
 from src.core.slots.slot_filler import SlotFillerConfig, fill_slots
 from src.core.surface.surface_realizer import SurfaceRealizerConfig, realize_surface
 from src.training.policy_memory import PolicyMemoryConfig, PolicyMemoryStore
+from src.training.unknown_word_learner import (
+    UnknownWordLearner,
+    build_unknown_word_learner_config,
+)
 from src.utils.settings import apply_arg_defaults, build_dataclass_config, get_setting, load_settings
 
 LOGGER = logging.getLogger(__name__)
 JST = ZoneInfo("Asia/Tokyo")
 
 
+@dataclass(slots=True)
+class TokenizationResult:
+    tokens: List[str] = field(default_factory=list)
+    normalized_tokens: List[str] = field(default_factory=list)
+    tokenization: List[TokenizationToken] = field(default_factory=list)
+    unknown_spans: List[UnknownSpan] = field(default_factory=list)
+
+
 class SurfaceNormalizer:
     def __init__(self, lexicon: LexiconContainer) -> None:
         self.lexicon = lexicon
-        self.surface_map = self._build_surface_map(lexicon)
+        settings = load_settings()
+        unknown_word_data = get_setting(settings, "pipeline", "unknown_word", default={})
+        self.unknown_word_config = build_unknown_word_learner_config(unknown_word_data)
+        self.unknown_word_learner: Optional[UnknownWordLearner] = None
+        if self.unknown_word_config.enabled:
+            self.unknown_word_learner = UnknownWordLearner(
+                lexicon=self.lexicon,
+                config=self.unknown_word_config,
+            )
+            self.unknown_word_learner.apply_existing_overlay()
+        self._refresh_indexes()
+
+    def _refresh_indexes(self) -> None:
+        self.surface_map = self._build_surface_map(self.lexicon)
         self.length_index = self._build_length_index(self.surface_map.keys())
+        self.pos_by_surface = self._build_pos_by_surface(self.lexicon)
+
+    def refresh_runtime_lexicon(self) -> None:
+        self._refresh_indexes()
 
     def normalize_token(self, token: str) -> List[str]:
-        text = str(token).strip()
-        if not text:
-            return []
-        if text in self.surface_map:
-            return list(self.surface_map[text])
-        return [text]
+        result = self.tokenize_text(str(token or ""))
+        return list(result.normalized_tokens)
 
     def normalize_text(self, raw_text: str) -> List[str]:
+        result = self.tokenize_text(raw_text)
+        return list(result.normalized_tokens)
+
+    def tokenize_words(self, explicit_words: Sequence[str]) -> TokenizationResult:
+        tokenization: List[TokenizationToken] = []
+        unknown_spans: List[UnknownSpan] = []
+        for index, word in enumerate(explicit_words):
+            piece = str(word or "").strip()
+            if not piece:
+                continue
+            part = self.tokenize_text(piece)
+            if not part.tokenization:
+                continue
+            tokenization.extend(part.tokenization)
+            unknown_spans.extend(part.unknown_spans)
+        normalized = [token for item in tokenization for token in item.normalized_tokens if token]
+        raw_tokens = [item.surface for item in tokenization if item.surface]
+        return TokenizationResult(
+            tokens=raw_tokens,
+            normalized_tokens=normalized,
+            tokenization=tokenization,
+            unknown_spans=unknown_spans,
+        )
+
+    def tokenize_text(self, raw_text: str) -> TokenizationResult:
         text = str(raw_text or "").strip()
         if not text:
-            return []
+            return TokenizationResult()
 
-        tokens: List[str] = []
+        tokenization: List[TokenizationToken] = []
+        unknown_spans: List[UnknownSpan] = []
         i = 0
         n = len(text)
         while i < n:
@@ -71,14 +125,81 @@ class SurfaceNormalizer:
                 continue
 
             matched = self._longest_match(text, i)
-            if matched:
-                tokens.extend(self.surface_map[matched])
+            if matched and not self._prefer_unknown_over_match(text, i, matched):
+                tokenization.append(
+                    TokenizationToken(
+                        surface=matched,
+                        normalized_tokens=list(self.surface_map[matched]),
+                        known=True,
+                        pos_hint=self.pos_by_surface.get(matched, ""),
+                        start=i,
+                        end=i + len(matched),
+                        reason="lexicon_longest_match",
+                    )
+                )
                 i += len(matched)
                 continue
 
-            tokens.append(ch)
-            i += 1
-        return tokens
+            surface, end, pos_hint = self._consume_unknown_span(text, i, ignore_single_char_matches=True)
+            tokenization.append(
+                TokenizationToken(
+                    surface=surface,
+                    normalized_tokens=[surface],
+                    known=False,
+                    pos_hint=pos_hint,
+                    start=i,
+                    end=end,
+                    reason="unknown_span",
+                )
+            )
+            unknown_spans.append(
+                UnknownSpan(
+                    surface=surface,
+                    start=i,
+                    end=end,
+                    reason="unmatched_surface_span",
+                    pos_hint=pos_hint,
+                    status="detected",
+                    suggested_words=[surface],
+                )
+            )
+            i = end
+
+        normalized = [token for item in tokenization for token in item.normalized_tokens if token]
+        raw_tokens = [item.surface for item in tokenization if item.surface]
+        return TokenizationResult(
+            tokens=raw_tokens,
+            normalized_tokens=normalized,
+            tokenization=tokenization,
+            unknown_spans=unknown_spans,
+        )
+
+    def maybe_learn_unknown_words(self, *, raw_text: str, tokenization_result: TokenizationResult) -> Dict[str, object]:
+        if not self.unknown_word_learner or not tokenization_result.unknown_spans:
+            return {
+                "enabled": bool(self.unknown_word_learner),
+                "examined_spans": [],
+                "applied_words": [],
+                "skipped_spans": [],
+                "pending_records": [],
+                "retokenized": False,
+            }
+        learning_result = self.unknown_word_learner.learn_unknown_spans(
+            raw_text=raw_text,
+            unknown_spans=tokenization_result.unknown_spans,
+        )
+        if learning_result.applied_words:
+            self.refresh_runtime_lexicon()
+        return {
+            "enabled": True,
+            "examined_spans": list(learning_result.examined_spans),
+            "applied_words": list(learning_result.applied_words),
+            "skipped_spans": list(learning_result.skipped_spans),
+            "pending_records": list(learning_result.pending_records),
+            "overlay_path": learning_result.overlay_path,
+            "pending_path": learning_result.pending_path,
+            "retokenized": bool(learning_result.applied_words),
+        }
 
     def _build_surface_map(self, lexicon: LexiconContainer) -> Dict[str, List[str]]:
         mapping: Dict[str, List[str]] = {}
@@ -96,6 +217,22 @@ class SurfaceNormalizer:
                 mapping[surface] = list(form.tokens or [entry.word])
         return mapping
 
+    def _build_pos_by_surface(self, lexicon: LexiconContainer) -> Dict[str, str]:
+        mapping: Dict[str, str] = {}
+        for entry in lexicon.entries.values():
+            pos = str(entry.grammar.pos or "")
+            if entry.word and pos:
+                mapping.setdefault(entry.word, pos)
+            for alias in entry.aliases:
+                alias_text = str(alias).strip()
+                if alias_text and pos:
+                    mapping.setdefault(alias_text, pos)
+            for form in entry.surface_forms:
+                surface = str(form.surface).strip()
+                if surface and pos:
+                    mapping.setdefault(surface, pos)
+        return mapping
+
     def _build_length_index(self, words: Iterable[str]) -> Dict[int, set[str]]:
         index: Dict[int, set[str]] = {}
         for word in words:
@@ -107,15 +244,105 @@ class SurfaceNormalizer:
 
     def _longest_match(self, text: str, start: int) -> str:
         remaining = len(text) - start
-        lengths = sorted(
-            (length for length in self.length_index if length <= remaining),
-            reverse=True,
-        )
+        lengths = sorted((length for length in self.length_index if length <= remaining), reverse=True)
         for length in lengths:
             piece = text[start : start + length]
             if piece in self.length_index[length]:
                 return piece
         return ""
+
+    def _consume_unknown_span(self, text: str, start: int, ignore_single_char_matches: bool = False) -> Tuple[str, int, str]:
+        n = len(text)
+        if start >= n:
+            return "", start, "unknown"
+        ch = text[start]
+        if self._is_hard_boundary(ch):
+            return ch, start + 1, "symbol"
+
+        end = start + 1
+        while end < n:
+            current = text[end]
+            if current.isspace():
+                break
+            if self._is_hard_boundary(current):
+                break
+            if end > start:
+                next_match = self._longest_match(text, end)
+                if next_match and not (ignore_single_char_matches and len(next_match) == 1):
+                    break
+            if end > start and self._should_break_unknown_span(text[end - 1], current):
+                break
+            end += 1
+        if end <= start:
+            end = start + 1
+        surface = text[start:end]
+        return surface, end, self._guess_pos_hint(surface)
+
+    def _prefer_unknown_over_match(self, text: str, start: int, matched: str) -> bool:
+        if len(str(matched)) != 1:
+            return False
+        if start + 1 >= len(text):
+            return False
+        if text[start + 1].isspace() or self._is_hard_boundary(text[start + 1]):
+            return False
+        preview_surface, _, _ = self._consume_unknown_span(text, start, ignore_single_char_matches=True)
+        if len(preview_surface) <= 1:
+            return False
+        pos = self.pos_by_surface.get(matched, "")
+        if pos in {"particle", "auxiliary"}:
+            return True
+        matched_class = self._char_class(matched)
+        next_class = self._char_class(text[start + 1])
+        return matched_class not in {"symbol", "space"} and next_class not in {"symbol", "space"}
+
+    def _guess_pos_hint(self, surface: str) -> str:
+        text = str(surface or "").strip()
+        if not text:
+            return "unknown"
+        if all('ぁ' <= ch <= 'ん' or ch == 'ー' for ch in text):
+            if text.endswith('に'):
+                return 'adverb'
+            if text.endswith('い'):
+                return 'adjective'
+            return 'adverb'
+        if all('ァ' <= ch <= 'ヶ' or ch == 'ー' for ch in text):
+            return 'noun'
+        if all(ch.isascii() and (ch.isalpha() or ch.isdigit()) for ch in text):
+            return 'noun'
+        if any('一' <= ch <= '龯' for ch in text):
+            return 'noun'
+        return 'unknown'
+
+    def _should_break_unknown_span(self, left: str, right: str) -> bool:
+        left_class = self._char_class(left)
+        right_class = self._char_class(right)
+        if left_class == 'latin' and right_class == 'latin':
+            return False
+        if left_class == 'digit' and right_class == 'digit':
+            return False
+        if left_class == 'kanji' and right_class == 'hiragana':
+            return False
+        if left_class == 'hiragana' and right_class == 'kanji':
+            return True
+        return left_class != right_class and 'symbol' not in {left_class, right_class}
+
+    def _char_class(self, ch: str) -> str:
+        if ch.isspace():
+            return 'space'
+        if 'ぁ' <= ch <= 'ん' or ch == 'ー':
+            return 'hiragana'
+        if 'ァ' <= ch <= 'ヶ':
+            return 'katakana'
+        if '一' <= ch <= '龯':
+            return 'kanji'
+        if ch.isdigit():
+            return 'digit'
+        if ch.isascii() and ch.isalpha():
+            return 'latin'
+        return 'symbol'
+
+    def _is_hard_boundary(self, ch: str) -> bool:
+        return ch in "、。,.!?！？()（）[]{}「」『』:;：；/\\"
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -159,27 +386,29 @@ def build_raw_text(args: argparse.Namespace) -> str:
     return str(args.text or "").strip()
 
 
+def build_tokenization_result(
+    raw_text: str,
+    explicit_words: Optional[Sequence[str]],
+    normalizer: SurfaceNormalizer,
+) -> TokenizationResult:
+    if explicit_words:
+        return normalizer.tokenize_words(explicit_words)
+
+    if not raw_text:
+        return TokenizationResult()
+
+    if " " in raw_text:
+        return normalizer.tokenize_words(raw_text.split())
+
+    return normalizer.tokenize_text(raw_text)
+
+
 def build_tokens(
     raw_text: str,
     explicit_words: Optional[Sequence[str]],
     normalizer: SurfaceNormalizer,
 ) -> List[str]:
-    if explicit_words:
-        tokens: List[str] = []
-        for word in explicit_words:
-            tokens.extend(normalizer.normalize_token(str(word)))
-        return [token for token in tokens if token]
-
-    if not raw_text:
-        return []
-
-    if " " in raw_text:
-        tokens: List[str] = []
-        for part in raw_text.split():
-            tokens.extend(normalizer.normalize_token(part))
-        return [token for token in tokens if token]
-
-    return normalizer.normalize_text(raw_text)
+    return list(build_tokenization_result(raw_text=raw_text, explicit_words=explicit_words, normalizer=normalizer).normalized_tokens)
 
 
 def build_slot_trace(filled_slots) -> SlotTrace:
@@ -617,9 +846,15 @@ def run_pipeline(
         LOGGER.error("empty_input")
         raise ValueError("Input text is empty. Use --text or --words.")
 
-    tokens = build_tokens(raw_text=raw_text, explicit_words=args.words, normalizer=normalizer)
+    tokenization_result = build_tokenization_result(raw_text=raw_text, explicit_words=args.words, normalizer=normalizer)
+    unknown_word_learning = normalizer.maybe_learn_unknown_words(raw_text=raw_text, tokenization_result=tokenization_result)
+    if unknown_word_learning.get("retokenized"):
+        tokenization_result = build_tokenization_result(raw_text=raw_text, explicit_words=args.words, normalizer=normalizer)
+    tokens = list(tokenization_result.normalized_tokens)
     LOGGER.info("input raw_text=%s", raw_text)
     LOGGER.info("input tokens=%s", tokens)
+    if tokenization_result.unknown_spans:
+        LOGGER.info("input unknown_spans=%s", [item.surface for item in tokenization_result.unknown_spans])
 
     session_id = new_session_id()
     turn_id = new_turn_id()
@@ -627,8 +862,10 @@ def run_pipeline(
 
     input_state = build_input_state(
         raw_text=raw_text,
-        tokens=tokens,
+        tokens=list(tokenization_result.tokens or tokens),
         normalized_tokens=tokens,
+        tokenization=list(tokenization_result.tokenization),
+        unknown_spans=list(tokenization_result.unknown_spans),
         session_id=session_id,
         turn_id=turn_id,
         timestamp=datetime.now(JST).isoformat(timespec="seconds"),
@@ -731,6 +968,9 @@ def run_pipeline(
             "entry_count": len(lexicon.entries),
             "raw_text": raw_text,
             "tokens": tokens,
+            "tokenization": [dataclass_to_dict(item) for item in tokenization_result.tokenization],
+            "unknown_spans": [dataclass_to_dict(item) for item in tokenization_result.unknown_spans],
+            "unknown_word_learning": unknown_word_learning,
             "response_score": dataclass_to_dict(response.score),
             "reward": dataclass_to_dict(reward),
             "slot_trace": dataclass_to_dict(slot_trace),

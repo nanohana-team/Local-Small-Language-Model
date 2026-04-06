@@ -344,10 +344,34 @@ class LexiconContainer:
 
 
 @dataclass(slots=True)
+class TokenizationToken:
+    surface: str
+    normalized_tokens: List[str] = field(default_factory=list)
+    known: bool = True
+    pos_hint: str = ""
+    start: int = 0
+    end: int = 0
+    reason: str = ""
+
+
+@dataclass(slots=True)
+class UnknownSpan:
+    surface: str
+    start: int = 0
+    end: int = 0
+    reason: str = ""
+    pos_hint: str = "unknown"
+    status: str = "pending"
+    suggested_words: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class InputState:
     raw_text: str
     tokens: List[str]
     normalized_tokens: List[str] = field(default_factory=list)
+    tokenization: List[TokenizationToken] = field(default_factory=list)
+    unknown_spans: List[UnknownSpan] = field(default_factory=list)
     timestamp: str = ""
     session_id: str = ""
     turn_id: str = ""
@@ -601,6 +625,8 @@ def build_input_state(
     raw_text: str,
     tokens: List[str],
     normalized_tokens: Optional[List[str]] = None,
+    tokenization: Optional[List[TokenizationToken]] = None,
+    unknown_spans: Optional[List[UnknownSpan]] = None,
     session_id: str = "",
     turn_id: str = "",
     timestamp: Optional[str] = None,
@@ -609,6 +635,8 @@ def build_input_state(
         raw_text=raw_text,
         tokens=list(tokens),
         normalized_tokens=list(normalized_tokens or tokens),
+        tokenization=list(tokenization or []),
+        unknown_spans=list(unknown_spans or []),
         timestamp=timestamp or datetime.now(JST).isoformat(timespec="seconds"),
         session_id=session_id,
         turn_id=turn_id,
@@ -635,6 +663,8 @@ def build_runtime_state_snapshot(
         "raw_text": input_state.raw_text,
         "tokens": list(input_state.tokens),
         "normalized_tokens": list(input_state.normalized_tokens),
+        "tokenization": [dataclass_to_dict(item) for item in input_state.tokenization],
+        "unknown_spans": [dataclass_to_dict(item) for item in input_state.unknown_spans],
         "dialogue_state": build_dialogue_state_snapshot(dialogue_state),
     }
 

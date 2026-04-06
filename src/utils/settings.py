@@ -68,6 +68,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             'include_question_variant': True,
             'include_soft_variant': True,
         },
+        'unknown_word': {
+            'enabled': True,
+            'min_span_length': 2,
+            'max_spans_per_turn': 2,
+            'promote_threshold': 1,
+            'pending_path': 'runtime/unknown_word_candidates.jsonl',
+            'overlay_path': 'runtime/lexicon_overlay.json',
+            'temperature': 0.1,
+            'max_output_tokens': 220,
+            'preferred_models': [],
+        },
         'basic_scorer': {
             'semantic_weight': 0.28,
             'slot_weight': 0.24,

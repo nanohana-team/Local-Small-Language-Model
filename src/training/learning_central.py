@@ -14,6 +14,7 @@ from src.apps.run_minimal_chat import (
     build_dialogue_state_after,
     build_episode_actions,
     build_slot_trace,
+    build_tokenization_result,
     build_tokens,
 )
 from src.core.logging.trace_logger import JsonlTraceLogger
@@ -176,18 +177,31 @@ def run_learning_episode(
     turn_id = new_turn_id('learnturn')
     episode_id = new_episode_id('learnep')
 
-    tokens = build_tokens(
+    tokenization_result = build_tokenization_result(
         raw_text=raw_text,
         explicit_words=explicit_words,
         normalizer=normalizer,
     )
+    unknown_word_learning = normalizer.maybe_learn_unknown_words(
+        raw_text=raw_text,
+        tokenization_result=tokenization_result,
+    )
+    if unknown_word_learning.get('retokenized'):
+        tokenization_result = build_tokenization_result(
+            raw_text=raw_text,
+            explicit_words=explicit_words,
+            normalizer=normalizer,
+        )
+    tokens = list(tokenization_result.normalized_tokens)
     if not tokens:
         raise ValueError('No tokens could be built from the given learning input.')
 
     input_state = build_input_state(
         raw_text=raw_text,
-        tokens=tokens,
+        tokens=list(tokenization_result.tokens or tokens),
         normalized_tokens=tokens,
+        tokenization=list(tokenization_result.tokenization),
+        unknown_spans=list(tokenization_result.unknown_spans),
         session_id=session_id,
         turn_id=turn_id,
         timestamp=datetime.now(JST).isoformat(timespec='seconds'),
@@ -384,6 +398,9 @@ def run_learning_episode(
             'mode': 'learning',
             'raw_text': raw_text,
             'tokens': tokens,
+            'tokenization': [dataclass_to_dict(item) for item in tokenization_result.tokenization],
+            'unknown_spans': [dataclass_to_dict(item) for item in tokenization_result.unknown_spans],
+            'unknown_word_learning': unknown_word_learning,
             'response_score': dataclass_to_dict(response.score),
             'reward': dataclass_to_dict(reward),
             'slot_trace': dataclass_to_dict(slot_trace),
