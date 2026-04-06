@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
 import sys
 from copy import deepcopy
@@ -63,6 +64,12 @@ class SurfaceNormalizer:
         settings = load_settings()
         unknown_word_data = get_setting(settings, "pipeline", "unknown_word", default={})
         self.unknown_word_config = build_unknown_word_learner_config(unknown_word_data)
+        pending_override = str(os.environ.get("LSLM_UNKNOWN_WORD_PENDING_PATH", "") or "").strip()
+        overlay_override = str(os.environ.get("LSLM_UNKNOWN_WORD_OVERLAY_PATH", "") or "").strip()
+        if pending_override:
+            self.unknown_word_config.pending_path = pending_override
+        if overlay_override:
+            self.unknown_word_config.overlay_path = overlay_override
         self.unknown_word_learner: Optional[UnknownWordLearner] = None
         if self.unknown_word_config.enabled:
             self.unknown_word_learner = UnknownWordLearner(

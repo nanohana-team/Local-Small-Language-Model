@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--teacher-target-weight', type=float, default=None)
     parser.add_argument('--external-fallback', choices=['neutral', 'internal'], default=None)
     parser.add_argument('--neutral-external-score', type=float, default=None)
+    parser.add_argument('--log-dir', default='logs')
     return parser
 
 
@@ -84,6 +85,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     setup_logging(
         app_name='lslm_learning',
+        log_dir=args.log_dir,
         console_level=logging.DEBUG if args.debug else logging.INFO,
     )
 

@@ -1,5 +1,6 @@
 learning:
   episodes: 1
+  tasks: 1
   target_mode: llm
   external_mode: llm
   input_mode: llm

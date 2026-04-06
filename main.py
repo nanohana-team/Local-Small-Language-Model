@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--seed-topic', default=None)
     parser.add_argument('--seed-text', default=None)
     parser.add_argument('--report-every', type=int, default=None)
+    parser.add_argument('--learning-tasks', type=int, default=None)
 
     return parser
 
@@ -74,6 +75,7 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
             ('seed_topic', ('learning', 'seed_topic'), ''),
             ('seed_text', ('learning', 'seed_text'), 'こんにちは。今日はどんな一日になりそうですか。'),
             ('report_every', ('learning', 'report_every'), 1),
+            ('learning_tasks', ('learning', 'tasks'), 1),
         ],
     )
 
@@ -194,6 +196,12 @@ def dispatch_auto_learning_mode(args: argparse.Namespace) -> int:
     return int(auto_loop_learning_main(learning_argv))
 
 
+def dispatch_parallel_learning_mode(args: argparse.Namespace) -> int:
+    from src.apps.parallel_learning import run_parallel_learning
+
+    return int(run_parallel_learning(args))
+
+
 def dispatch_learning_mode(args: argparse.Namespace) -> int:
     from src.apps.chat_learning import main as chat_learning_main
 
@@ -275,6 +283,10 @@ def run_chat_mode(args: argparse.Namespace) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = resolve_args(parser.parse_args(argv))
+
+    learning_tasks = max(1, int(getattr(args, 'learning_tasks', 1) or 1))
+    if args.mode in {'learn', 'auto-learn'} and learning_tasks > 1:
+        return dispatch_parallel_learning_mode(args)
 
     if args.mode == 'learn':
         return dispatch_learning_mode(args)

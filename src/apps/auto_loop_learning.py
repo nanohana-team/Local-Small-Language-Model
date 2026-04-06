@@ -152,6 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--seed-topic', default=None)
     parser.add_argument('--seed-text', default=None)
     parser.add_argument('--report-every', type=int, default=None)
+    parser.add_argument('--log-dir', default='logs')
+    parser.add_argument('--loop-index-offset', type=int, default=0)
     return parser
 
 
@@ -197,6 +199,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     setup_logging(
         app_name='lslm_auto_learning',
+        log_dir=args.log_dir,
         console_level=logging.DEBUG if args.debug else logging.INFO,
     )
 
@@ -283,7 +286,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     for episode_index in range(1, episode_count + 1):
         generated_input = input_generator.generate(
-            loop_index=episode_index,
+            loop_index=int(args.loop_index_offset) + episode_index,
             history_inputs=history_inputs,
             history_targets=history_targets,
             seed_topic=args.seed_topic,
