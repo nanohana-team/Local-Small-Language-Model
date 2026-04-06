@@ -4,7 +4,10 @@ import uuid
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
+from zoneinfo import ZoneInfo
 
+
+JST = ZoneInfo("Asia/Tokyo")
 
 IntentType = Literal[
     "respond",
@@ -28,6 +31,15 @@ RecallSourceType = Literal[
     "relation",
     "axis",
     "fallback",
+]
+
+ActionStageType = Literal[
+    "intent",
+    "recall",
+    "slot",
+    "surface",
+    "evaluation",
+    "unknown",
 ]
 
 SlotName = Literal[
@@ -439,6 +451,95 @@ class ScoreBreakdown:
 
 
 @dataclass(slots=True)
+class ActionCandidateSnapshot:
+    key: str = ""
+    label: str = ""
+    score: float = 0.0
+    rank: int = 0
+    source: str = ""
+    kept: bool = False
+    dropped: bool = False
+    drop_reason: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class EpisodeAction:
+    stage: ActionStageType = "unknown"
+    action_type: str = ""
+    selected: Any = None
+    candidates: List[ActionCandidateSnapshot] = field(default_factory=list)
+    confidence: float = 0.0
+    note: str = ""
+    candidate_count: int = 0
+    selected_count: int = 0
+    dropped_count: int = 0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SlotTraceItem:
+    slot_name: str
+    expected: bool = False
+    required: bool = False
+    filled: bool = False
+    value: str = ""
+    confidence: float = 0.0
+    source_candidate: str = ""
+    inferred: bool = False
+    note: str = ""
+
+
+@dataclass(slots=True)
+class SlotTrace:
+    predicate: str = ""
+    predicate_type: str = ""
+    frame_constraints: List[str] = field(default_factory=list)
+    all_slots: List[str] = field(default_factory=list)
+    filled_slots: List[SlotTraceItem] = field(default_factory=list)
+    missing_required: List[str] = field(default_factory=list)
+    optional_unfilled: List[str] = field(default_factory=list)
+    consistency_score: float = 0.0
+
+
+@dataclass(slots=True)
+class InternalRewardBreakdown:
+    semantic: float = 0.0
+    slot: float = 0.0
+    grammar: float = 0.0
+    retention: float = 0.0
+    policy: float = 0.0
+    total: float = 0.0
+    reasons: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ExternalRewardComponent:
+    evaluator_name: str = ""
+    score: float = 0.0
+    weight: float = 1.0
+    weighted_score: float = 0.0
+    label: str = ""
+    feedback: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExternalRewardBreakdown:
+    components: List[ExternalRewardComponent] = field(default_factory=list)
+    total: float = 0.0
+
+
+@dataclass(slots=True)
+class RewardBreakdown:
+    internal: InternalRewardBreakdown = field(default_factory=InternalRewardBreakdown)
+    external: ExternalRewardBreakdown = field(default_factory=ExternalRewardBreakdown)
+    total: float = 0.0
+    reasons: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class ResponseResult:
     text: str
     intent: IntentType = "unknown"
@@ -473,6 +574,16 @@ class TraceLog:
     evaluation: List[EvaluationResult] = field(default_factory=list)
     debug: Dict[str, Any] = field(default_factory=dict)
 
+    episode_id: str = ""
+    timestamp: str = ""
+    record_type: str = "episode_trace"
+    state_before: Dict[str, Any] = field(default_factory=dict)
+    actions: List[EpisodeAction] = field(default_factory=list)
+    slot_trace: SlotTrace = field(default_factory=SlotTrace)
+    reward: RewardBreakdown = field(default_factory=RewardBreakdown)
+    state_after: Dict[str, Any] = field(default_factory=dict)
+    dialogue_state_after: Optional[DialogueState] = None
+
 
 def dataclass_to_dict(value: Any) -> Any:
     if is_dataclass(value):
@@ -498,10 +609,34 @@ def build_input_state(
         raw_text=raw_text,
         tokens=list(tokens),
         normalized_tokens=list(normalized_tokens or tokens),
-        timestamp=timestamp or datetime.now().isoformat(timespec="seconds"),
+        timestamp=timestamp or datetime.now(JST).isoformat(timespec="seconds"),
         session_id=session_id,
         turn_id=turn_id,
     )
+
+
+def build_dialogue_state_snapshot(dialogue_state: DialogueState) -> Dict[str, Any]:
+    return {
+        "current_topic": dialogue_state.current_topic,
+        "last_subject": dialogue_state.last_subject,
+        "last_object": dialogue_state.last_object,
+        "referents": dict(dialogue_state.referents),
+        "context_vector": dialogue_state.context_vector.to_dict(),
+        "inferred_intent_history": list(dialogue_state.inferred_intent_history),
+        "variables": dict(dialogue_state.variables),
+    }
+
+
+def build_runtime_state_snapshot(
+    input_state: InputState,
+    dialogue_state: DialogueState,
+) -> Dict[str, Any]:
+    return {
+        "raw_text": input_state.raw_text,
+        "tokens": list(input_state.tokens),
+        "normalized_tokens": list(input_state.normalized_tokens),
+        "dialogue_state": build_dialogue_state_snapshot(dialogue_state),
+    }
 
 
 def new_session_id(prefix: str = "sess") -> str:
@@ -509,4 +644,8 @@ def new_session_id(prefix: str = "sess") -> str:
 
 
 def new_turn_id(prefix: str = "turn") -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def new_episode_id(prefix: str = "ep") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"

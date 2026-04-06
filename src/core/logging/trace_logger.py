@@ -44,6 +44,7 @@ class JsonlTraceLogger:
     使い方:
     - append_trace(trace) で TraceLog / dataclass / dict をそのまま 1 行 JSON に保存
     - append_event(...) でイベント型ログも追記可能
+    - append_episode_trace(trace) で RL 用エピソード行として追記可能
     """
 
     def __init__(
@@ -80,6 +81,9 @@ class JsonlTraceLogger:
     def new_turn_id(self) -> str:
         return f"turn_{uuid.uuid4().hex[:12]}"
 
+    def new_episode_id(self) -> str:
+        return f"episode_{uuid.uuid4().hex[:12]}"
+
     def append_record(self, record: Mapping[str, Any]) -> Path:
         jsonable = _to_jsonable(record)
         with self.latest_path.open("a", encoding="utf-8") as f:
@@ -94,8 +98,10 @@ class JsonlTraceLogger:
         *,
         session_id: str = "",
         turn_id: str = "",
+        episode_id: str = "",
     ) -> Path:
         record: dict[str, Any] = {
+            "record_type": "event",
             "event": event,
             "timestamp": now_jst_iso(),
         }
@@ -103,6 +109,8 @@ class JsonlTraceLogger:
             record["session_id"] = session_id
         if turn_id:
             record["turn_id"] = turn_id
+        if episode_id:
+            record["episode_id"] = episode_id
         if payload:
             record.update(_to_jsonable(payload))
         return self.append_record(record)
@@ -123,9 +131,41 @@ class JsonlTraceLogger:
 
     def append_trace(self, trace: Any) -> Path:
         jsonable = _to_jsonable(trace)
-        if isinstance(jsonable, dict) and "timestamp" not in jsonable:
-            jsonable["timestamp"] = now_jst_iso()
-        return self.append_record(jsonable if isinstance(jsonable, dict) else {"trace": jsonable, "timestamp": now_jst_iso()})
+        if isinstance(jsonable, dict):
+            jsonable.setdefault("record_type", "episode_trace")
+            jsonable.setdefault("record_version", "rl_trace_v2")
+            jsonable.setdefault("timestamp", now_jst_iso())
+            jsonable.setdefault("episode_id", self.new_episode_id())
+            return self.append_record(jsonable)
+
+        return self.append_record(
+            {
+                "record_type": "episode_trace",
+                "record_version": "rl_trace_v2",
+                "episode_id": self.new_episode_id(),
+                "timestamp": now_jst_iso(),
+                "trace": jsonable,
+            }
+        )
+
+    def append_episode_trace(self, trace: Any) -> Path:
+        return self.append_trace(trace)
+
+    def append_reward(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        episode_id: str,
+        reward: Mapping[str, Any],
+    ) -> Path:
+        return self.append_event(
+            "episode_reward",
+            payload={"reward": _to_jsonable(reward)},
+            session_id=session_id,
+            turn_id=turn_id,
+            episode_id=episode_id,
+        )
 
     def append_error(
         self,
@@ -135,6 +175,7 @@ class JsonlTraceLogger:
         error_type: str,
         message: str,
         detail: Mapping[str, Any] | None = None,
+        episode_id: str = "",
     ) -> Path:
         payload: dict[str, Any] = {
             "error_type": error_type,
@@ -142,4 +183,11 @@ class JsonlTraceLogger:
         }
         if detail:
             payload["detail"] = _to_jsonable(detail)
-        return self.append_event("error", payload=payload, session_id=session_id, turn_id=turn_id)
+
+        return self.append_event(
+            "error",
+            payload=payload,
+            session_id=session_id,
+            turn_id=turn_id,
+            episode_id=episode_id,
+        )
