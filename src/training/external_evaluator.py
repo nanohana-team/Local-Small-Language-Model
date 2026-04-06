@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Protocol
 
 from src.core.schema import EvaluationResult
@@ -49,8 +49,44 @@ class NullExternalEvaluator:
 
 
 @dataclass(slots=True)
+class HeuristicExternalEvaluatorConfig:
+    non_empty_weight: float = 0.15
+    length_weight: float = 0.15
+    slot_weight: float = 0.25
+    intent_weight: float = 0.20
+    target_weight: float = 0.25
+    empty_slot_score: float = 0.5
+    empty_target_score: float = 0.5
+    empty_token_overlap_score: float = 0.5
+    question_match_score: float = 1.0
+    question_mismatch_score: float = 0.4
+    empathy_match_score: float = 1.0
+    empathy_mismatch_score: float = 0.5
+    default_intent_score: float = 0.9
+    punctuated_respond_penalty_score: float = 0.5
+    unknown_intent_score: float = 0.7
+    exact_echo_penalty: float = 0.25
+    partial_echo_penalty: float = 0.10
+    empty_length_score: float = 0.0
+    short_length_divisor: float = 4.0
+    short_length_floor: int = 4
+    ideal_length_min: int = 4
+    ideal_length_max: int = 64
+    long_length_min: int = 65
+    long_length_max: int = 128
+    long_length_decay_span: float = 96.0
+    long_length_base: int = 64
+    too_long_score: float = 0.2
+    excellent_threshold: float = 0.85
+    good_threshold: float = 0.70
+    acceptable_threshold: float = 0.50
+    weak_threshold: float = 0.30
+
+
+@dataclass(slots=True)
 class HeuristicExternalEvaluator:
     evaluator_name: str = 'heuristic'
+    config: HeuristicExternalEvaluatorConfig = field(default_factory=HeuristicExternalEvaluatorConfig)
 
     def evaluate(
         self,
@@ -74,11 +110,11 @@ class HeuristicExternalEvaluator:
         echo_penalty = self._echo_penalty(user_text, response)
 
         raw_total = (
-            non_empty * 0.15
-            + length_score * 0.15
-            + slot_score * 0.25
-            + intent_score * 0.20
-            + target_score * 0.25
+            non_empty * float(self.config.non_empty_weight)
+            + length_score * float(self.config.length_weight)
+            + slot_score * float(self.config.slot_weight)
+            + intent_score * float(self.config.intent_weight)
+            + target_score * float(self.config.target_weight)
             - echo_penalty
         )
         total = max(0.0, min(1.0, raw_total))
@@ -112,19 +148,22 @@ class HeuristicExternalEvaluator:
     def _length_score(self, response: str) -> float:
         length = len(response)
         if length == 0:
-            return 0.0
-        if 4 <= length <= 64:
+            return float(self.config.empty_length_score)
+        if int(self.config.ideal_length_min) <= length <= int(self.config.ideal_length_max):
             return 1.0
-        if 1 <= length < 4:
-            return max(0.0, length / 4.0)
-        if 65 <= length <= 128:
-            return max(0.0, 1.0 - ((length - 64) / 96.0))
-        return 0.2
+        if 1 <= length < int(self.config.short_length_floor):
+            divisor = max(1.0, float(self.config.short_length_divisor))
+            return max(0.0, length / divisor)
+        if int(self.config.long_length_min) <= length <= int(self.config.long_length_max):
+            span = max(1.0, float(self.config.long_length_decay_span))
+            base = int(self.config.long_length_base)
+            return max(0.0, 1.0 - ((length - base) / span))
+        return float(self.config.too_long_score)
 
     def _slot_score(self, response: str, used_slots: Dict[str, str]) -> float:
         values = [str(v).strip() for v in used_slots.values() if str(v).strip()]
         if not values:
-            return 0.5
+            return float(self.config.empty_slot_score)
         matched = sum(1 for value in values if value in response)
         return matched / max(1, len(values))
 
@@ -132,23 +171,23 @@ class HeuristicExternalEvaluator:
         if not response:
             return 0.0
         if intent == 'question':
-            return 1.0 if ('?' in response or '？' in response) else 0.4
+            return float(self.config.question_match_score) if ('?' in response or '？' in response) else float(self.config.question_mismatch_score)
         if intent == 'empathy':
             empathy_markers = ('そう', '大変', 'わか', 'ですね', 'だね', 'よかった', '大丈夫')
-            return 1.0 if any(marker in response for marker in empathy_markers) else 0.5
+            return float(self.config.empathy_match_score) if any(marker in response for marker in empathy_markers) else float(self.config.empathy_mismatch_score)
         if intent in {'respond', 'confirm', 'explain'}:
             if '?' in response or '？' in response:
-                return 0.5
-            return 0.9
-        return 0.7
+                return float(self.config.punctuated_respond_penalty_score)
+            return float(self.config.default_intent_score)
+        return float(self.config.unknown_intent_score)
 
     def _target_score(self, response: str, target_text: str) -> float:
         if not response or not target_text:
-            return 0.5
+            return float(self.config.empty_target_score)
         response_tokens = set(response.replace('。', ' ').replace('、', ' ').split())
         target_tokens = set(target_text.replace('。', ' ').replace('、', ' ').split())
         if not response_tokens or not target_tokens:
-            return 0.5
+            return float(self.config.empty_token_overlap_score)
         overlap = len(response_tokens & target_tokens) / max(1, len(target_tokens))
         if response == target_text:
             return 1.0
@@ -160,27 +199,40 @@ class HeuristicExternalEvaluator:
         if not user_input or not response:
             return 0.0
         if user_input == response:
-            return 0.25
+            return float(self.config.exact_echo_penalty)
         if response in user_input or user_input in response:
-            return 0.10
+            return float(self.config.partial_echo_penalty)
         return 0.0
 
     def _label_from_score(self, score: float) -> str:
-        if score >= 0.85:
+        if score >= float(self.config.excellent_threshold):
             return 'excellent'
-        if score >= 0.70:
+        if score >= float(self.config.good_threshold):
             return 'good'
-        if score >= 0.50:
+        if score >= float(self.config.acceptable_threshold):
             return 'acceptable'
-        if score >= 0.30:
+        if score >= float(self.config.weak_threshold):
             return 'weak'
         return 'poor'
 
 
+@dataclass(slots=True)
+class LLMExternalEvaluatorConfig:
+    temperature: float = 0.1
+    max_output_tokens: int = 240
+
+
 class LLMExternalEvaluator:
-    def __init__(self, gateway: LLMGateway | None = None) -> None:
+    def __init__(
+        self,
+        gateway: LLMGateway | None = None,
+        *,
+        config: LLMExternalEvaluatorConfig | None = None,
+        heuristic_config: HeuristicExternalEvaluatorConfig | None = None,
+    ) -> None:
         self.gateway = gateway or LLMGateway()
-        self.heuristic_fallback = HeuristicExternalEvaluator()
+        self.config = config or LLMExternalEvaluatorConfig()
+        self.heuristic_fallback = HeuristicExternalEvaluator(config=heuristic_config or HeuristicExternalEvaluatorConfig())
 
     def evaluate(
         self,
@@ -225,8 +277,8 @@ class LLMExternalEvaluator:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 purpose='external_evaluation',
-                temperature=0.1,
-                max_output_tokens=240,
+                temperature=float(self.config.temperature),
+                max_output_tokens=max(1, int(self.config.max_output_tokens)),
             )
             payload = self._parse_payload(response.text)
             score = max(0.0, min(1.0, float(payload.get('score', 0.0))))
@@ -283,12 +335,22 @@ class LLMExternalEvaluator:
             return 0.0
 
 
-def build_external_evaluator(mode: str = 'llm') -> BaseExternalEvaluator:
+def build_external_evaluator(
+    mode: str = 'llm',
+    *,
+    gateway: LLMGateway | None = None,
+    llm_config: LLMExternalEvaluatorConfig | None = None,
+    heuristic_config: HeuristicExternalEvaluatorConfig | None = None,
+) -> BaseExternalEvaluator:
     normalized = str(mode or 'llm').strip().lower()
     if normalized in {'', 'llm', 'teacher'}:
-        return LLMExternalEvaluator()
+        return LLMExternalEvaluator(
+            gateway=gateway,
+            config=llm_config,
+            heuristic_config=heuristic_config,
+        )
     if normalized in {'heuristic', 'rule'}:
-        return HeuristicExternalEvaluator()
+        return HeuristicExternalEvaluator(config=heuristic_config or HeuristicExternalEvaluatorConfig())
     if normalized in {'none', 'disabled', 'off'}:
         return NullExternalEvaluator()
     raise ValueError(f'Unsupported external evaluator mode: {mode}')

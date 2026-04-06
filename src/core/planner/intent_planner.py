@@ -22,6 +22,35 @@ class IntentRule:
     note: str = ""
 
 
+@dataclass(slots=True)
+class IntentPlannerConfig:
+    question_min_score: float = 1.0
+    question_confidence_base: float = 0.72
+    explain_min_score: float = 1.0
+    explain_confidence_base: float = 0.70
+    confirm_min_score: float = 1.0
+    confirm_confidence_base: float = 0.68
+    empathy_min_score: float = 1.0
+    empathy_confidence_base: float = 0.66
+    respond_min_score: float = 1.0
+    respond_confidence_base: float = 0.58
+    fallback_respond_confidence: float = 0.51
+    token_keyword_weight: float = 1.0
+    text_keyword_weight: float = 0.75
+    question_marker_override_score: float = 1.5
+    question_like_ending_bonus: float = 0.80
+    question_request_bonus: float = 0.50
+    explain_request_bonus: float = 0.70
+    empathy_multi_hit_threshold: int = 2
+    empathy_multi_hit_bonus: float = 0.60
+    confirm_phrase_bonus: float = 0.60
+    explain_followup_max_raw_text_length: int = 20
+    explain_followup_confidence_floor: float = 0.57
+    topic_context_confidence_bonus: float = 0.08
+    topic_context_confidence_cap: float = 0.98
+    confidence_extra_multiplier: float = 0.10
+
+
 class IntentPlanner:
     """
     LSLM v3 最小縦スライス用の軽量 Intent Planner。
@@ -102,13 +131,14 @@ class IntentPlanner:
         "はい",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, config: Optional[IntentPlannerConfig] = None) -> None:
+        self.config = config or IntentPlannerConfig()
         self._rules: List[IntentRule] = [
             IntentRule(
                 intent="question",
                 keywords=list(self.QUESTION_WORDS),
-                min_score=1.0,
-                confidence_base=0.72,
+                min_score=self.config.question_min_score,
+                confidence_base=self.config.question_confidence_base,
                 response_policy_hint="answer",
                 required_slots=[],
                 optional_slots=["topic"],
@@ -117,8 +147,8 @@ class IntentPlanner:
             IntentRule(
                 intent="explain",
                 keywords=list(self.EXPLAIN_WORDS),
-                min_score=1.0,
-                confidence_base=0.70,
+                min_score=self.config.explain_min_score,
+                confidence_base=self.config.explain_confidence_base,
                 response_policy_hint="answer",
                 required_slots=["topic"],
                 optional_slots=[],
@@ -127,8 +157,8 @@ class IntentPlanner:
             IntentRule(
                 intent="confirm",
                 keywords=list(self.CONFIRM_WORDS),
-                min_score=1.0,
-                confidence_base=0.68,
+                min_score=self.config.confirm_min_score,
+                confidence_base=self.config.confirm_confidence_base,
                 response_policy_hint="clarify",
                 required_slots=[],
                 optional_slots=["topic", "state"],
@@ -137,8 +167,8 @@ class IntentPlanner:
             IntentRule(
                 intent="empathy",
                 keywords=list(self.EMPATHY_WORDS),
-                min_score=1.0,
-                confidence_base=0.66,
+                min_score=self.config.empathy_min_score,
+                confidence_base=self.config.empathy_confidence_base,
                 response_policy_hint="agree",
                 required_slots=[],
                 optional_slots=["state", "cause"],
@@ -147,8 +177,8 @@ class IntentPlanner:
             IntentRule(
                 intent="respond",
                 keywords=list(self.RESPOND_WORDS),
-                min_score=1.0,
-                confidence_base=0.58,
+                min_score=self.config.respond_min_score,
+                confidence_base=self.config.respond_confidence_base,
                 response_policy_hint="answer",
                 required_slots=[],
                 optional_slots=["topic"],
@@ -267,7 +297,7 @@ class IntentPlanner:
             )
             return self._build_plan_from_rule(
                 rule=best_rule,
-                score=max(rule_scores.get("question", 0.0), 1.5),
+                score=max(rule_scores.get("question", 0.0), float(self.config.question_marker_override_score)),
                 reasons=["question_marker"],
             )
 
@@ -285,7 +315,7 @@ class IntentPlanner:
             )
             return IntentPlan(
                 intent="respond",
-                confidence=0.51,
+                confidence=float(self.config.fallback_respond_confidence),
                 required_slots=[],
                 optional_slots=["topic"],
                 response_policy_hint="answer",
@@ -318,21 +348,23 @@ class IntentPlanner:
 
         for keyword in rule.keywords:
             if keyword in token_set:
-                score += 1.0
+                score += float(self.config.token_keyword_weight)
                 reasons.append(f"token:{keyword}")
                 LOGGER.debug(
-                    "intent_planner.score_rule.hit intent=%s mode=token keyword=%s add=1.00 running_score=%.4f",
+                    "intent_planner.score_rule.hit intent=%s mode=token keyword=%s add=%.2f running_score=%.4f",
                     rule.intent,
                     keyword,
+                    float(self.config.token_keyword_weight),
                     score,
                 )
             elif keyword and keyword in raw_text:
-                score += 0.75
+                score += float(self.config.text_keyword_weight)
                 reasons.append(f"text:{keyword}")
                 LOGGER.debug(
-                    "intent_planner.score_rule.hit intent=%s mode=text keyword=%s add=0.75 running_score=%.4f",
+                    "intent_planner.score_rule.hit intent=%s mode=text keyword=%s add=%.2f running_score=%.4f",
                     rule.intent,
                     keyword,
+                    float(self.config.text_keyword_weight),
                     score,
                 )
             else:
@@ -344,26 +376,29 @@ class IntentPlanner:
 
         if rule.intent == "question":
             if raw_text.endswith("か") or raw_text.endswith("か。"):
-                score += 0.8
+                score += float(self.config.question_like_ending_bonus)
                 reasons.append("question_like_ending")
                 LOGGER.debug(
-                    "intent_planner.score_rule.bonus intent=question bonus=0.80 reason=question_like_ending running_score=%.4f",
+                    "intent_planner.score_rule.bonus intent=question bonus=%.2f reason=question_like_ending running_score=%.4f",
+                    float(self.config.question_like_ending_bonus),
                     score,
                 )
             if any(word in raw_text for word in ("教えて", "知りたい", "分かる", "わかる")):
-                score += 0.5
+                score += float(self.config.question_request_bonus)
                 reasons.append("question_request_phrase")
                 LOGGER.debug(
-                    "intent_planner.score_rule.bonus intent=question bonus=0.50 reason=question_request_phrase running_score=%.4f",
+                    "intent_planner.score_rule.bonus intent=question bonus=%.2f reason=question_request_phrase running_score=%.4f",
+                    float(self.config.question_request_bonus),
                     score,
                 )
 
         if rule.intent == "explain":
             if any(word in raw_text for word in ("教えて", "説明して", "解説して")):
-                score += 0.7
+                score += float(self.config.explain_request_bonus)
                 reasons.append("explicit_explain_request")
                 LOGGER.debug(
-                    "intent_planner.score_rule.bonus intent=explain bonus=0.70 reason=explicit_explain_request running_score=%.4f",
+                    "intent_planner.score_rule.bonus intent=explain bonus=%.2f reason=explicit_explain_request running_score=%.4f",
+                    float(self.config.explain_request_bonus),
                     score,
                 )
 
@@ -374,20 +409,22 @@ class IntentPlanner:
                 empathy_hit_count,
                 raw_text,
             )
-            if empathy_hit_count >= 2:
-                score += 0.6
+            if empathy_hit_count >= int(self.config.empathy_multi_hit_threshold):
+                score += float(self.config.empathy_multi_hit_bonus)
                 reasons.append("multiple_emotion_markers")
                 LOGGER.debug(
-                    "intent_planner.score_rule.bonus intent=empathy bonus=0.60 reason=multiple_emotion_markers running_score=%.4f",
+                    "intent_planner.score_rule.bonus intent=empathy bonus=%.2f reason=multiple_emotion_markers running_score=%.4f",
+                    float(self.config.empathy_multi_hit_bonus),
                     score,
                 )
 
         if rule.intent == "confirm":
             if any(word in raw_text for word in ("でいい", "で合ってる", "であってる")):
-                score += 0.6
+                score += float(self.config.confirm_phrase_bonus)
                 reasons.append("yes_no_confirmation_like")
                 LOGGER.debug(
-                    "intent_planner.score_rule.bonus intent=confirm bonus=0.60 reason=yes_no_confirmation_like running_score=%.4f",
+                    "intent_planner.score_rule.bonus intent=confirm bonus=%.2f reason=yes_no_confirmation_like running_score=%.4f",
+                    float(self.config.confirm_phrase_bonus),
                     score,
                 )
 
@@ -455,10 +492,10 @@ class IntentPlanner:
             plan.intent == "respond"
             and dialogue_state.inferred_intent_history
             and dialogue_state.inferred_intent_history[-1] == "explain"
-            and len(raw_text) <= 20
+            and len(raw_text) <= int(self.config.explain_followup_max_raw_text_length)
         ):
             plan.intent = "explain"
-            plan.confidence = max(plan.confidence, 0.57)
+            plan.confidence = max(plan.confidence, float(self.config.explain_followup_confidence_floor))
             if "topic" not in plan.optional_slots:
                 plan.optional_slots.append("topic")
             plan.note = f"{plan.note} | dialogue_context_shift_to_explain".strip(" |")
@@ -472,7 +509,7 @@ class IntentPlanner:
 
         if plan.intent == "confirm" and dialogue_state.current_topic:
             old_confidence = plan.confidence
-            plan.confidence = min(0.98, plan.confidence + 0.08)
+            plan.confidence = min(float(self.config.topic_context_confidence_cap), plan.confidence + float(self.config.topic_context_confidence_bonus))
             plan.note = f"{plan.note} | topic_context_available".strip(" |")
             LOGGER.debug(
                 "intent_planner.refine.applied rule=topic_context_available old_confidence=%.4f new_confidence=%.4f",
@@ -507,7 +544,7 @@ class IntentPlanner:
             return 0.0
 
         extra = max(0.0, score - min_score)
-        confidence = base + (extra * 0.10)
+        confidence = base + (extra * float(self.config.confidence_extra_multiplier))
         normalized = max(0.0, min(0.99, confidence))
         LOGGER.debug(
             "intent_planner.normalize_confidence base=%.4f score=%.4f min_score=%.4f extra=%.4f raw=%.4f normalized=%.4f",
@@ -524,6 +561,7 @@ class IntentPlanner:
 def plan_intent(
     input_state: InputState,
     dialogue_state: Optional[DialogueState] = None,
+    config: Optional[IntentPlannerConfig] = None,
 ) -> IntentPlan:
-    planner = IntentPlanner()
+    planner = IntentPlanner(config=config)
     return planner.plan(input_state=input_state, dialogue_state=dialogue_state)

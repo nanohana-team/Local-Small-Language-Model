@@ -48,9 +48,20 @@ class EchoTargetGenerator:
         )
 
 
+@dataclass(slots=True)
+class LLMTargetGeneratorConfig:
+    temperature: float = 0.4
+    max_output_tokens: int = 160
+
+
 class LLMTargetGenerator:
-    def __init__(self, gateway: LLMGateway | None = None) -> None:
+    def __init__(
+        self,
+        gateway: LLMGateway | None = None,
+        config: LLMTargetGeneratorConfig | None = None,
+    ) -> None:
         self.gateway = gateway or LLMGateway()
+        self.config = config or LLMTargetGeneratorConfig()
 
     def generate(
         self,
@@ -82,8 +93,8 @@ class LLMTargetGenerator:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             purpose='target_generation',
-            temperature=0.4,
-            max_output_tokens=160,
+            temperature=float(self.config.temperature),
+            max_output_tokens=max(1, int(self.config.max_output_tokens)),
         )
         text = self._clean_text(response.text)
         LOGGER.info('target_generator.llm.done model=%s text=%s', response.model, text)
@@ -103,10 +114,15 @@ class LLMTargetGenerator:
         return ' '.join(lines)
 
 
-def build_target_generator(mode: str = 'llm') -> BaseTargetGenerator:
+def build_target_generator(
+    mode: str = 'llm',
+    *,
+    gateway: LLMGateway | None = None,
+    config: LLMTargetGeneratorConfig | None = None,
+) -> BaseTargetGenerator:
     normalized = str(mode or 'llm').strip().lower()
     if normalized in {'llm', 'teacher', 'external-teacher'}:
-        return LLMTargetGenerator()
+        return LLMTargetGenerator(gateway=gateway, config=config)
     if normalized in {'echo', 'none', 'disabled', 'off'}:
         return EchoTargetGenerator()
     raise ValueError(f'Unsupported target generator mode: {mode}')

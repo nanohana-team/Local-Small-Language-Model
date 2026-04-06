@@ -27,6 +27,9 @@ class BasicScorerConfig:
     empty_candidate_penalty: float = 0.40
     missing_required_penalty: float = 0.08
     max_grammar_penalty: float = 0.45
+    policy_memory_teacher_bonus: float = 0.22
+    policy_memory_response_bonus: float = 0.10
+    policy_memory_retention_floor: float = 0.75
 
 
 class BasicScorer:
@@ -486,6 +489,16 @@ class BasicScorer:
             return 0.50
 
         score = self._clamp01(matched / float(total))
+        if self._is_policy_memory_candidate(candidate):
+            if candidate.slot_coverage >= 0.80 and candidate.semantic_score >= 0.80:
+                adjusted = max(score, float(self.config.policy_memory_retention_floor))
+                if adjusted != score:
+                    LOGGER.debug(
+                        "basic_scorer.score_input_retention.policy_memory_floor old=%.6f new=%.6f",
+                        score,
+                        adjusted,
+                    )
+                score = adjusted
         LOGGER.debug(
             "basic_scorer.score_input_retention.result matched=%s total=%s score=%.6f",
             matched,
@@ -564,6 +577,21 @@ class BasicScorer:
                     score,
                 )
 
+        if self._is_policy_memory_teacher_candidate(candidate):
+            score += float(self.config.policy_memory_teacher_bonus)
+            LOGGER.debug(
+                "basic_scorer.score_policy_fitness.add reason=policy_memory_teacher_bonus add=%.2f running=%.6f",
+                self.config.policy_memory_teacher_bonus,
+                score,
+            )
+        elif self._is_policy_memory_response_candidate(candidate):
+            score += float(self.config.policy_memory_response_bonus)
+            LOGGER.debug(
+                "basic_scorer.score_policy_fitness.add reason=policy_memory_response_bonus add=%.2f running=%.6f",
+                self.config.policy_memory_response_bonus,
+                score,
+            )
+
         if policy == "agree" and ("ね" in text or "大変" in text):
             score += 0.08
             LOGGER.debug(
@@ -589,6 +617,16 @@ class BasicScorer:
             final,
         )
         return final
+
+
+    def _is_policy_memory_candidate(self, candidate: RealizationCandidate) -> bool:
+        return str(candidate.template_id or '').startswith('policy_memory_')
+
+    def _is_policy_memory_teacher_candidate(self, candidate: RealizationCandidate) -> bool:
+        return str(candidate.template_id or '').startswith('policy_memory_teacher_target')
+
+    def _is_policy_memory_response_candidate(self, candidate: RealizationCandidate) -> bool:
+        return str(candidate.template_id or '').startswith('policy_memory_selected_response')
 
     def _build_reasons(
         self,
@@ -633,6 +671,8 @@ class BasicScorer:
 
         if policy_fitness >= 0.75:
             reasons.append("policy_fit_good")
+        if self._is_policy_memory_candidate(candidate):
+            reasons.append("policy_memory_candidate")
 
         LOGGER.debug(
             "basic_scorer.build_reasons.result reasons=%s",

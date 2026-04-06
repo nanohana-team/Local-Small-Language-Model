@@ -1,0 +1,63 @@
+pipeline:
+  intent_planner:
+    question_min_score: 1.0
+    question_confidence_base: 0.72
+    explain_min_score: 1.0
+    explain_confidence_base: 0.70
+    confirm_min_score: 1.0
+    confirm_confidence_base: 0.68
+    empathy_min_score: 1.0
+    empathy_confidence_base: 0.66
+    respond_min_score: 1.0
+    respond_confidence_base: 0.58
+    fallback_respond_confidence: 0.51
+    token_keyword_weight: 1.0
+    text_keyword_weight: 0.75
+    question_marker_override_score: 1.5
+    question_like_ending_bonus: 0.80
+    question_request_bonus: 0.50
+    explain_request_bonus: 0.70
+    empathy_multi_hit_threshold: 2
+    empathy_multi_hit_bonus: 0.60
+    confirm_phrase_bonus: 0.60
+    explain_followup_max_raw_text_length: 20
+    explain_followup_confidence_floor: 0.57
+    topic_context_confidence_bonus: 0.08
+    topic_context_confidence_cap: 0.98
+    confidence_extra_multiplier: 0.10
+
+  semantic_recall:
+    max_candidates: 24
+    max_relation_hops: 1
+    relation_weight_scale: 0.85
+    axis_weight_scale: 0.75
+    input_weight: 1.25
+    prefer_content_words_in_axis: true
+    axis_probe_limit: 512
+
+  slot_filler:
+    marker_confidence: 0.88
+    inferred_confidence: 0.58
+    fallback_confidence: 0.46
+    use_dialogue_topic_fallback: true
+    use_recall_topic_fallback: true
+
+  surface_realizer:
+    default_style: neutral
+    default_politeness: plain
+    max_candidates: 4
+    include_question_variant: true
+    include_soft_variant: true
+
+  basic_scorer:
+    semantic_weight: 0.28
+    slot_weight: 0.24
+    grammar_weight: 0.18
+    retention_weight: 0.16
+    policy_weight: 0.14
+    empty_candidate_penalty: 0.40
+    missing_required_penalty: 0.08
+    max_grammar_penalty: 0.45
+    policy_memory_teacher_bonus: 0.22
+    policy_memory_response_bonus: 0.10
+    policy_memory_retention_floor: 0.75

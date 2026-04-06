@@ -17,9 +17,9 @@ from src.apps.run_minimal_chat import (
     build_tokens,
 )
 from src.core.logging.trace_logger import JsonlTraceLogger
-from src.core.planner.intent_planner import plan_intent
-from src.core.recall.semantic_recall import recall_semantics
-from src.core.scoring.basic_scorer import choose_best_response
+from src.core.planner.intent_planner import IntentPlannerConfig, plan_intent
+from src.core.recall.semantic_recall import SemanticRecallConfig, recall_semantics
+from src.core.scoring.basic_scorer import BasicScorerConfig, choose_best_response
 from src.core.schema import (
     DialogueState,
     EvaluationResult,
@@ -33,13 +33,14 @@ from src.core.schema import (
     new_session_id,
     new_turn_id,
 )
-from src.core.slots.slot_filler import fill_slots
-from src.core.surface.surface_realizer import realize_surface
-from src.training.external_evaluator import BaseExternalEvaluator, build_external_evaluator
-from src.training.policy_memory import PolicyMemoryStore
+from src.core.slots.slot_filler import SlotFillerConfig, fill_slots
+from src.core.surface.surface_realizer import SurfaceRealizerConfig, realize_surface
+from src.training.external_evaluator import BaseExternalEvaluator, HeuristicExternalEvaluatorConfig, LLMExternalEvaluatorConfig, build_external_evaluator
+from src.training.policy_memory import PolicyMemoryConfig, PolicyMemoryStore
 from src.training.reward_aggregator import RewardAggregator, RewardAggregatorConfig
-from src.training.target_generator import BaseTargetGenerator, GeneratedTarget, build_target_generator
+from src.training.target_generator import BaseTargetGenerator, GeneratedTarget, LLMTargetGeneratorConfig, build_target_generator
 from src.training.teacher_guidance import TeacherGuidanceConfig, TeacherGuidedReranker
+from src.utils.settings import build_dataclass_config, get_setting, load_settings
 
 LOGGER = logging.getLogger(__name__)
 JST = ZoneInfo('Asia/Tokyo')
@@ -149,16 +150,27 @@ def run_learning_episode(
     policy_memory: PolicyMemoryStore | None = None,
     teacher_reranker: TeacherGuidedReranker | None = None,
 ) -> LearningEpisodeResult:
+    settings = load_settings()
     runtime_config = runtime_config or LearningRuntimeConfig()
-    external_evaluator = external_evaluator or build_external_evaluator('llm')
-    reward_aggregator = reward_aggregator or RewardAggregator(RewardAggregatorConfig())
-    target_generator = target_generator or build_target_generator('llm')
+    external_evaluator = external_evaluator or build_external_evaluator(
+        'llm',
+        llm_config=build_dataclass_config(LLMExternalEvaluatorConfig, get_setting(settings, 'llm', 'external_evaluation', default={})),
+        heuristic_config=build_dataclass_config(HeuristicExternalEvaluatorConfig, get_setting(settings, 'llm', 'heuristic_external', default={})),
+    )
+    reward_aggregator = reward_aggregator or RewardAggregator(
+        build_dataclass_config(RewardAggregatorConfig, get_setting(settings, 'learning', 'reward_aggregator', default={}))
+    )
+    target_generator = target_generator or build_target_generator(
+        'llm',
+        config=build_dataclass_config(LLMTargetGeneratorConfig, get_setting(settings, 'llm', 'target_generation', default={})),
+    )
     teacher_reranker = teacher_reranker or TeacherGuidedReranker(
-        TeacherGuidanceConfig(target_weight=runtime_config.teacher_target_weight)
+        build_dataclass_config(TeacherGuidanceConfig, get_setting(settings, 'teacher_guidance', default={}))
     )
 
+    policy_memory_config = build_dataclass_config(PolicyMemoryConfig, get_setting(settings, 'policy_memory', default={}))
     if runtime_config.use_policy_memory and policy_memory is None:
-        policy_memory = PolicyMemoryStore(runtime_config.policy_memory_path, autoload=True)
+        policy_memory = PolicyMemoryStore(runtime_config.policy_memory_path, config=policy_memory_config, autoload=True)
 
     session_id = session_id or new_session_id('learnsess')
     turn_id = new_turn_id('learnturn')
@@ -192,12 +204,19 @@ def run_learning_episode(
         raw_text,
     )
 
-    intent_plan = plan_intent(input_state=input_state, dialogue_state=dialogue_state_current)
+    intent_planner_config = build_dataclass_config(IntentPlannerConfig, get_setting(settings, 'pipeline', 'intent_planner', default={}))
+    recall_config = build_dataclass_config(SemanticRecallConfig, get_setting(settings, 'pipeline', 'semantic_recall', default={}))
+    slot_filler_config = build_dataclass_config(SlotFillerConfig, get_setting(settings, 'pipeline', 'slot_filler', default={}))
+    surface_config = build_dataclass_config(SurfaceRealizerConfig, get_setting(settings, 'pipeline', 'surface_realizer', default={}))
+    scorer_config = build_dataclass_config(BasicScorerConfig, get_setting(settings, 'pipeline', 'basic_scorer', default={}))
+
+    intent_plan = plan_intent(input_state=input_state, dialogue_state=dialogue_state_current, config=intent_planner_config)
     recall_result = recall_semantics(
         input_state=input_state,
         lexicon=lexicon,
         dialogue_state=dialogue_state_current,
         intent_plan=intent_plan,
+        config=recall_config,
     )
     filled_slots = fill_slots(
         input_state=input_state,
@@ -205,11 +224,13 @@ def run_learning_episode(
         lexicon=lexicon,
         intent_plan=intent_plan,
         dialogue_state=dialogue_state_current,
+        config=slot_filler_config,
     )
     surface_plan, base_candidates = realize_surface(
         filled_slots=filled_slots,
         intent_plan=intent_plan,
         lexicon=lexicon,
+        config=surface_config,
     )
 
     policy_memory_matches: List[Dict[str, object]] = []
@@ -219,7 +240,7 @@ def run_learning_episode(
             intent_plan=intent_plan,
             filled_slots=filled_slots,
             existing_texts=[item.text for item in base_candidates],
-            limit=runtime_config.policy_memory_limit,
+            limit=max(1, int(runtime_config.policy_memory_limit)),
         )
         if memory_candidates:
             LOGGER.info(
@@ -235,6 +256,7 @@ def run_learning_episode(
         intent_plan=intent_plan,
         filled_slots=filled_slots,
         candidates=merged_candidates,
+        config=scorer_config,
     )
 
     used_slots_for_target = _filled_slot_strings(filled_slots)
@@ -261,6 +283,7 @@ def run_learning_episode(
             intent_plan=intent_plan,
             filled_slots=filled_slots,
             candidates=[selected_candidate],
+            config=scorer_config,
         )
         LOGGER.info(
             'learning_episode.teacher_override episode_id=%s old=%s new=%s',

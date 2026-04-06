@@ -63,6 +63,8 @@ class PolicyMemoryConfig:
     max_records_per_key: int = 16
     teacher_reward_scale: float = 1.0
     response_reward_scale: float = 0.6
+    teacher_source_bonus: float = 0.08
+    response_source_bonus: float = 0.03
 
 
 class PolicyMemoryStore:
@@ -251,7 +253,11 @@ class PolicyMemoryStore:
             structural_score = (slot_hits / float(slot_total)) if slot_total > 0 else 0.0
             text_bonus = min(0.24, 0.06 * text_slot_hits)
             confidence_bonus = min(0.20, 0.20 * record.weight)
-            source_bonus = 0.05 if record.source == 'selected_response' else 0.02
+            source_bonus = (
+                self.config.teacher_source_bonus
+                if record.source == 'teacher_target'
+                else self.config.response_source_bonus
+            )
             match_score = structural_score + text_bonus + confidence_bonus + source_bonus
             if slot_total == 0 and text_slot_hits == 0:
                 continue
@@ -283,15 +289,20 @@ class PolicyMemoryStore:
         current_total = max(1, len([value for value in filled_slots.values.values() if value.value]))
         signature_ratio = (match.slot_hits / float(match.slot_total)) if match.slot_total > 0 else 0.0
         text_ratio = min(1.0, match.text_slot_hits / float(current_total))
-        coverage = (signature_ratio * 0.65) + (text_ratio * 0.35)
+        coverage = (signature_ratio * 0.55) + (text_ratio * 0.45)
+        if match.record.source == 'teacher_target':
+            coverage += 0.05
         return max(0.0, min(1.0, coverage))
 
     def _estimate_semantic_score(self, match: PolicyMemoryMatch) -> float:
-        base = 0.48
-        base += min(0.16, match.match_score * 0.22)
-        base += min(0.16, match.record.weight * 0.20)
+        base = 0.52
+        base += min(0.20, match.match_score * 0.18)
+        base += min(0.18, match.record.weight * 0.22)
+        base += min(0.08, match.record.last_external * 0.10)
         if match.record.source == 'teacher_target':
-            base += 0.04
+            base += 0.06
+        elif match.record.source == 'selected_response':
+            base += 0.02
         return max(0.0, min(1.0, base))
 
     def _find_record(self, *, intent: str, slots: Mapping[str, str], text: str, source: str) -> PolicyMemoryRecord | None:

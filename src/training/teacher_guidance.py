@@ -12,7 +12,9 @@ _PUNCT_RE = re.compile(r'[\s、。？！!?,，．・「」『』（）()\[\]{}]+
 @dataclass(slots=True)
 class TeacherGuidanceConfig:
     target_weight: float = 0.35
-    min_override_delta: float = 0.02
+    min_override_delta: float = 0.015
+    min_alignment_gain: float = 0.05
+    max_blended_regression: float = 0.01
 
 
 @dataclass(slots=True)
@@ -84,8 +86,24 @@ class TeacherGuidedReranker:
         )
         selected = rankings[0]
         base_index = max(range(len(candidates)), key=lambda idx: float(candidates[idx].final_score))
-        base_score = float(candidates[base_index].final_score)
-        overridden = selected.index != base_index and (selected.blended_score - base_score) >= self.config.min_override_delta
+        base_ranking = next((item for item in rankings if item.index == base_index), None)
+        if base_ranking is None:
+            base_ranking = TeacherCandidateRank(
+                index=base_index,
+                text=candidates[base_index].text,
+                base_score=float(candidates[base_index].final_score),
+                target_alignment=self._alignment_score(candidates[base_index].text, cleaned_target),
+                blended_score=float(candidates[base_index].final_score),
+            )
+
+        blended_gain = selected.blended_score - base_ranking.blended_score
+        alignment_gain = selected.target_alignment - base_ranking.target_alignment
+        has_enough_blended_gain = blended_gain >= float(self.config.min_override_delta)
+        has_alignment_win = (
+            alignment_gain >= float(self.config.min_alignment_gain)
+            and selected.blended_score >= (base_ranking.blended_score - float(self.config.max_blended_regression))
+        )
+        overridden = selected.index != base_index and (has_enough_blended_gain or has_alignment_win)
         final_index = selected.index if overridden else base_index
         final_text = candidates[final_index].text
 

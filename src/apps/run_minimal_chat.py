@@ -11,9 +11,9 @@ from zoneinfo import ZoneInfo
 
 from src.core.io.lsd_lexicon import load_lexicon_container
 from src.core.logging.trace_logger import JsonlTraceLogger
-from src.core.planner.intent_planner import plan_intent
-from src.core.recall.semantic_recall import recall_semantics
-from src.core.scoring.basic_scorer import choose_best_response
+from src.core.planner.intent_planner import IntentPlannerConfig, plan_intent
+from src.core.recall.semantic_recall import SemanticRecallConfig, recall_semantics
+from src.core.scoring.basic_scorer import BasicScorerConfig, choose_best_response
 from src.core.schema import (
     ActionCandidateSnapshot,
     DialogueState,
@@ -33,9 +33,10 @@ from src.core.schema import (
     new_session_id,
     new_turn_id,
 )
-from src.core.slots.slot_filler import fill_slots
-from src.core.surface.surface_realizer import realize_surface
-from src.training.policy_memory import PolicyMemoryStore
+from src.core.slots.slot_filler import SlotFillerConfig, fill_slots
+from src.core.surface.surface_realizer import SurfaceRealizerConfig, realize_surface
+from src.training.policy_memory import PolicyMemoryConfig, PolicyMemoryStore
+from src.utils.settings import apply_arg_defaults, build_dataclass_config, get_setting, load_settings
 
 LOGGER = logging.getLogger(__name__)
 JST = ZoneInfo("Asia/Tokyo")
@@ -119,16 +120,30 @@ class SurfaceNormalizer:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LSLM v3 minimal chat runner")
-    parser.add_argument("--lexicon", default="libs/dict.lsdx", help="辞書ファイルパス (.json / .lsd / .lsdx)")
+    parser.add_argument("--lexicon", default=None, help="辞書ファイルパス (.json / .lsd / .lsdx)")
     parser.add_argument("--text", default="", help="入力テキスト")
     parser.add_argument("--words", nargs="*", default=None, help="すでに分かち書き済みの入力トークン列")
-    parser.add_argument("--trace-dir", default="runtime/traces", help="trace JSONL の保存先ディレクトリ")
-    parser.add_argument("--policy-memory", default="runtime/policy_memory.json", help="学習済み方針メモリ JSON")
+    parser.add_argument("--trace-dir", default=None, help="trace JSONL の保存先ディレクトリ")
+    parser.add_argument("--policy-memory", default=None, help="学習済み方針メモリ JSON")
     parser.add_argument("--no-policy-memory", action="store_true", help="学習済み方針メモリを使わない")
     parser.add_argument("--no-trace", action="store_true", help="trace JSONL を保存しない")
     parser.add_argument("--console-debug", action="store_true", help="main 側互換用フラグ")
     return parser.parse_args(argv)
 
+
+
+
+def resolve_runtime_args(args: argparse.Namespace) -> argparse.Namespace:
+    settings = load_settings()
+    return apply_arg_defaults(
+        args,
+        settings,
+        [
+            ("lexicon", ("paths", "lexicon"), "libs/dict.lsdx"),
+            ("trace_dir", ("paths", "trace_dir"), "runtime/traces"),
+            ("policy_memory", ("paths", "policy_memory"), "runtime/policy_memory.json"),
+        ],
+    )
 
 def load_lexicon(path: Path) -> LexiconContainer:
     LOGGER.info("lexicon.load.start path=%s", path)
@@ -588,6 +603,8 @@ def run_pipeline(
     lexicon: LexiconContainer,
     normalizer: SurfaceNormalizer,
 ) -> Tuple[str, Optional[Path]]:
+    args = resolve_runtime_args(args)
+    settings = load_settings()
     lexicon_path = Path(args.lexicon)
     if not lexicon_path.exists():
         LOGGER.error("lexicon_not_found path=%s", lexicon_path)
@@ -619,12 +636,21 @@ def run_pipeline(
     dialogue_state = DialogueState()
     dialogue_state_before = deepcopy(dialogue_state)
 
-    intent_plan = plan_intent(input_state=input_state, dialogue_state=dialogue_state)
+    intent_planner_config = build_dataclass_config(IntentPlannerConfig, get_setting(settings, "pipeline", "intent_planner", default={}))
+    recall_config = build_dataclass_config(SemanticRecallConfig, get_setting(settings, "pipeline", "semantic_recall", default={}))
+    slot_filler_config = build_dataclass_config(SlotFillerConfig, get_setting(settings, "pipeline", "slot_filler", default={}))
+    surface_config = build_dataclass_config(SurfaceRealizerConfig, get_setting(settings, "pipeline", "surface_realizer", default={}))
+    scorer_config = build_dataclass_config(BasicScorerConfig, get_setting(settings, "pipeline", "basic_scorer", default={}))
+    policy_memory_config = build_dataclass_config(PolicyMemoryConfig, get_setting(settings, "policy_memory", default={}))
+    policy_memory_limit = max(1, int(get_setting(settings, "learning", "runtime", "policy_memory_limit", default=4)))
+
+    intent_plan = plan_intent(input_state=input_state, dialogue_state=dialogue_state, config=intent_planner_config)
     recall_result = recall_semantics(
         input_state=input_state,
         lexicon=lexicon,
         dialogue_state=dialogue_state,
         intent_plan=intent_plan,
+        config=recall_config,
     )
     filled_slots = fill_slots(
         input_state=input_state,
@@ -632,21 +658,23 @@ def run_pipeline(
         lexicon=lexicon,
         intent_plan=intent_plan,
         dialogue_state=dialogue_state,
+        config=slot_filler_config,
     )
     surface_plan, candidates = realize_surface(
         filled_slots=filled_slots,
         intent_plan=intent_plan,
         lexicon=lexicon,
+        config=surface_config,
     )
 
     policy_memory_matches: List[dict[str, object]] = []
     if not args.no_policy_memory:
-        policy_memory = PolicyMemoryStore(args.policy_memory, autoload=True)
+        policy_memory = PolicyMemoryStore(args.policy_memory, config=policy_memory_config, autoload=True)
         memory_candidates, policy_memory_matches = policy_memory.suggest(
             intent_plan=intent_plan,
             filled_slots=filled_slots,
             existing_texts=[item.text for item in candidates],
-            limit=4,
+            limit=policy_memory_limit,
         )
         if memory_candidates:
             LOGGER.info('policy_memory.augmented count=%s', len(memory_candidates))
@@ -657,6 +685,7 @@ def run_pipeline(
         intent_plan=intent_plan,
         filled_slots=filled_slots,
         candidates=candidates,
+        config=scorer_config,
     )
 
     evaluation: List[object] = []
@@ -724,7 +753,7 @@ def run_pipeline(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(argv)
+    args = resolve_runtime_args(parse_args(argv))
 
     from src.utils.logging import setup_logging
     import logging as root_logging
@@ -734,6 +763,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         console_level=root_logging.DEBUG if args.console_debug else root_logging.INFO,
     )
 
+    args = resolve_runtime_args(args)
+    settings = load_settings()
     lexicon_path = Path(args.lexicon)
     if not lexicon_path.exists():
         raise FileNotFoundError(f"Lexicon file not found: {lexicon_path}")
