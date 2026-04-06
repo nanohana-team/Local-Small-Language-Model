@@ -35,6 +35,7 @@ from src.core.schema import (
 )
 from src.core.slots.slot_filler import fill_slots
 from src.core.surface.surface_realizer import realize_surface
+from src.training.policy_memory import PolicyMemoryStore
 
 LOGGER = logging.getLogger(__name__)
 JST = ZoneInfo("Asia/Tokyo")
@@ -122,6 +123,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--text", default="", help="入力テキスト")
     parser.add_argument("--words", nargs="*", default=None, help="すでに分かち書き済みの入力トークン列")
     parser.add_argument("--trace-dir", default="runtime/traces", help="trace JSONL の保存先ディレクトリ")
+    parser.add_argument("--policy-memory", default="runtime/policy_memory.json", help="学習済み方針メモリ JSON")
+    parser.add_argument("--no-policy-memory", action="store_true", help="学習済み方針メモリを使わない")
     parser.add_argument("--no-trace", action="store_true", help="trace JSONL を保存しない")
     parser.add_argument("--console-debug", action="store_true", help="main 側互換用フラグ")
     return parser.parse_args(argv)
@@ -635,6 +638,20 @@ def run_pipeline(
         intent_plan=intent_plan,
         lexicon=lexicon,
     )
+
+    policy_memory_matches: List[dict[str, object]] = []
+    if not args.no_policy_memory:
+        policy_memory = PolicyMemoryStore(args.policy_memory, autoload=True)
+        memory_candidates, policy_memory_matches = policy_memory.suggest(
+            intent_plan=intent_plan,
+            filled_slots=filled_slots,
+            existing_texts=[item.text for item in candidates],
+            limit=4,
+        )
+        if memory_candidates:
+            LOGGER.info('policy_memory.augmented count=%s', len(memory_candidates))
+            candidates = list(candidates) + list(memory_candidates)
+
     response, scored_candidates = choose_best_response(
         input_state=input_state,
         intent_plan=intent_plan,
@@ -688,6 +705,7 @@ def run_pipeline(
             "response_score": dataclass_to_dict(response.score),
             "reward": dataclass_to_dict(reward),
             "slot_trace": dataclass_to_dict(slot_trace),
+            "policy_memory_matches": policy_memory_matches,
         },
     )
 

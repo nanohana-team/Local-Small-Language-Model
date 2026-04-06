@@ -1,0 +1,362 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from zoneinfo import ZoneInfo
+
+from src.core.schema import FilledSlots, IntentPlan, RealizationCandidate
+
+LOGGER = logging.getLogger(__name__)
+JST = ZoneInfo('Asia/Tokyo')
+
+_SLOT_PRIORITY: Tuple[str, ...] = (
+    'topic',
+    'state',
+    'predicate',
+    'target',
+    'actor',
+    'location',
+    'time',
+    'cause',
+    'recipient',
+    'manner',
+)
+
+_PUNCT_RE = re.compile(r'[\s、。？！!?,，．・「」『』（）()\[\]{}]+')
+
+
+@dataclass(slots=True)
+class PolicyMemoryRecord:
+    intent: str
+    slots: Dict[str, str]
+    text: str
+    source: str = 'teacher_target'
+    template_id: str = ''
+    count: int = 1
+    weight: float = 0.0
+    last_reward_total: float = 0.0
+    last_internal: float = 0.0
+    last_external: float = 0.0
+    created_at: str = ''
+    updated_at: str = ''
+
+
+@dataclass(slots=True)
+class PolicyMemoryMatch:
+    record: PolicyMemoryRecord
+    match_score: float
+    slot_hits: int
+    slot_total: int
+    exact_intent: bool
+    text_slot_hits: int
+
+
+@dataclass(slots=True)
+class PolicyMemoryConfig:
+    min_match_score: float = 0.34
+    max_suggestions: int = 4
+    max_records_per_key: int = 16
+    teacher_reward_scale: float = 1.0
+    response_reward_scale: float = 0.6
+
+
+class PolicyMemoryStore:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        config: PolicyMemoryConfig | None = None,
+        autoload: bool = True,
+    ) -> None:
+        self.path = Path(path)
+        self.config = config or PolicyMemoryConfig()
+        self.records: List[PolicyMemoryRecord] = []
+        if autoload:
+            self.load()
+
+    def load(self) -> None:
+        if not self.path.exists():
+            self.records = []
+            return
+
+        try:
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+        except Exception:
+            LOGGER.exception('policy_memory.load_failed path=%s', self.path)
+            self.records = []
+            return
+
+        records: List[PolicyMemoryRecord] = []
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get('text', '') or '').strip()
+            if not text:
+                continue
+            records.append(
+                PolicyMemoryRecord(
+                    intent=str(item.get('intent', 'unknown') or 'unknown'),
+                    slots={str(k): str(v) for k, v in dict(item.get('slots', {}) or {}).items() if str(v).strip()},
+                    text=text,
+                    source=str(item.get('source', 'teacher_target') or 'teacher_target'),
+                    template_id=str(item.get('template_id', '') or ''),
+                    count=max(1, int(item.get('count', 1) or 1)),
+                    weight=max(0.0, min(1.0, float(item.get('weight', 0.0) or 0.0))),
+                    last_reward_total=max(0.0, min(1.0, float(item.get('last_reward_total', 0.0) or 0.0))),
+                    last_internal=max(0.0, min(1.0, float(item.get('last_internal', 0.0) or 0.0))),
+                    last_external=max(0.0, min(1.0, float(item.get('last_external', 0.0) or 0.0))),
+                    created_at=str(item.get('created_at', '') or ''),
+                    updated_at=str(item.get('updated_at', '') or ''),
+                )
+            )
+        self.records = records
+
+    def save(self) -> Path:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = [asdict(record) for record in self.records]
+        self.path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding='utf-8',
+        )
+        return self.path
+
+    def remember(
+        self,
+        *,
+        intent: str,
+        slots: Mapping[str, str],
+        text: str,
+        reward_total: float,
+        internal_score: float,
+        external_score: float,
+        source: str,
+        template_id: str = '',
+    ) -> None:
+        cleaned_text = self._normalize_text(text)
+        if not cleaned_text:
+            return
+
+        slot_signature = self._stable_slots(slots)
+        reward_total = max(0.0, min(1.0, float(reward_total)))
+        internal_score = max(0.0, min(1.0, float(internal_score)))
+        external_score = max(0.0, min(1.0, float(external_score)))
+
+        source_scale = self.config.teacher_reward_scale if source == 'teacher_target' else self.config.response_reward_scale
+        blended_weight = max(0.0, min(1.0, reward_total * source_scale))
+        now = datetime.now(JST).isoformat(timespec='seconds')
+
+        existing = self._find_record(intent=intent, slots=slot_signature, text=cleaned_text, source=source)
+        if existing is None:
+            self.records.append(
+                PolicyMemoryRecord(
+                    intent=str(intent or 'unknown'),
+                    slots=slot_signature,
+                    text=cleaned_text,
+                    source=source,
+                    template_id=template_id,
+                    count=1,
+                    weight=blended_weight,
+                    last_reward_total=reward_total,
+                    last_internal=internal_score,
+                    last_external=external_score,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        else:
+            total_count = existing.count + 1
+            existing.weight = ((existing.weight * existing.count) + blended_weight) / float(total_count)
+            existing.count = total_count
+            existing.last_reward_total = reward_total
+            existing.last_internal = internal_score
+            existing.last_external = external_score
+            existing.updated_at = now
+            if template_id:
+                existing.template_id = template_id
+
+        self._trim_records(intent=intent, slots=slot_signature)
+
+    def suggest(
+        self,
+        *,
+        intent_plan: IntentPlan,
+        filled_slots: FilledSlots,
+        existing_texts: Sequence[str] | None = None,
+        limit: int | None = None,
+    ) -> tuple[List[RealizationCandidate], List[Dict[str, object]]]:
+        if not self.records:
+            return [], []
+
+        current_slots = self._filled_slots_to_dict(filled_slots)
+        existing_normalized = {self._normalize_text(text) for text in (existing_texts or []) if self._normalize_text(text)}
+        matches = self._rank_matches(
+            intent=intent_plan.intent,
+            slots=current_slots,
+        )
+        candidates: List[RealizationCandidate] = []
+        debug: List[Dict[str, object]] = []
+        max_items = max(1, int(limit or self.config.max_suggestions))
+
+        for index, match in enumerate(matches[:max_items], start=1):
+            text = self._normalize_text(match.record.text)
+            if not text or text in existing_normalized:
+                continue
+
+            slot_coverage = self._estimate_slot_coverage(match, filled_slots)
+            semantic_score = self._estimate_semantic_score(match)
+            candidate = RealizationCandidate(
+                text=text,
+                token_sequence=self._simple_tokenize(text),
+                template_id=f'policy_memory_{match.record.source}_{index}',
+                grammar_violations=self._quick_grammar_checks(text),
+                slot_coverage=slot_coverage,
+                semantic_score=semantic_score,
+                final_score=0.0,
+            )
+            candidates.append(candidate)
+            existing_normalized.add(text)
+            debug.append(
+                {
+                    'text': text,
+                    'source': match.record.source,
+                    'match_score': round(match.match_score, 6),
+                    'slot_hits': match.slot_hits,
+                    'slot_total': match.slot_total,
+                    'text_slot_hits': match.text_slot_hits,
+                    'weight': round(match.record.weight, 6),
+                    'count': match.record.count,
+                }
+            )
+
+        return candidates, debug
+
+    def _rank_matches(self, *, intent: str, slots: Mapping[str, str]) -> List[PolicyMemoryMatch]:
+        matches: List[PolicyMemoryMatch] = []
+        for record in self.records:
+            if record.intent != intent:
+                continue
+            slot_total = len(record.slots)
+            slot_hits = 0
+            for key, value in record.slots.items():
+                if slots.get(key, '') == value:
+                    slot_hits += 1
+
+            text_slot_hits = sum(1 for value in slots.values() if value and value in record.text)
+            exact_intent = record.intent == intent
+            structural_score = (slot_hits / float(slot_total)) if slot_total > 0 else 0.0
+            text_bonus = min(0.24, 0.06 * text_slot_hits)
+            confidence_bonus = min(0.20, 0.20 * record.weight)
+            source_bonus = 0.05 if record.source == 'selected_response' else 0.02
+            match_score = structural_score + text_bonus + confidence_bonus + source_bonus
+            if slot_total == 0 and text_slot_hits == 0:
+                continue
+            if match_score < self.config.min_match_score:
+                continue
+            matches.append(
+                PolicyMemoryMatch(
+                    record=record,
+                    match_score=match_score,
+                    slot_hits=slot_hits,
+                    slot_total=slot_total,
+                    exact_intent=exact_intent,
+                    text_slot_hits=text_slot_hits,
+                )
+            )
+
+        matches.sort(
+            key=lambda item: (
+                item.match_score,
+                item.record.weight,
+                item.record.last_reward_total,
+                item.record.count,
+            ),
+            reverse=True,
+        )
+        return matches
+
+    def _estimate_slot_coverage(self, match: PolicyMemoryMatch, filled_slots: FilledSlots) -> float:
+        current_total = max(1, len([value for value in filled_slots.values.values() if value.value]))
+        signature_ratio = (match.slot_hits / float(match.slot_total)) if match.slot_total > 0 else 0.0
+        text_ratio = min(1.0, match.text_slot_hits / float(current_total))
+        coverage = (signature_ratio * 0.65) + (text_ratio * 0.35)
+        return max(0.0, min(1.0, coverage))
+
+    def _estimate_semantic_score(self, match: PolicyMemoryMatch) -> float:
+        base = 0.48
+        base += min(0.16, match.match_score * 0.22)
+        base += min(0.16, match.record.weight * 0.20)
+        if match.record.source == 'teacher_target':
+            base += 0.04
+        return max(0.0, min(1.0, base))
+
+    def _find_record(self, *, intent: str, slots: Mapping[str, str], text: str, source: str) -> PolicyMemoryRecord | None:
+        for record in self.records:
+            if record.intent != intent:
+                continue
+            if record.source != source:
+                continue
+            if record.slots != dict(slots):
+                continue
+            if self._normalize_text(record.text) == text:
+                return record
+        return None
+
+    def _trim_records(self, *, intent: str, slots: Mapping[str, str]) -> None:
+        grouped: List[PolicyMemoryRecord] = [
+            record
+            for record in self.records
+            if record.intent == intent and record.slots == dict(slots)
+        ]
+        if len(grouped) <= self.config.max_records_per_key:
+            return
+        grouped.sort(
+            key=lambda item: (item.weight, item.last_reward_total, item.count),
+            reverse=True,
+        )
+        keep = set(id(item) for item in grouped[: self.config.max_records_per_key])
+        self.records = [record for record in self.records if (record.intent != intent or record.slots != dict(slots) or id(record) in keep)]
+
+    def _stable_slots(self, slots: Mapping[str, str]) -> Dict[str, str]:
+        stable: Dict[str, str] = {}
+        raw = {str(k): str(v).strip() for k, v in dict(slots or {}).items() if str(v).strip()}
+        for key in _SLOT_PRIORITY:
+            value = raw.get(key, '')
+            if value:
+                stable[key] = value
+        for key in sorted(raw):
+            if key not in stable:
+                stable[key] = raw[key]
+        return stable
+
+    def _filled_slots_to_dict(self, filled_slots: FilledSlots) -> Dict[str, str]:
+        return {
+            str(name): str(value.value).strip()
+            for name, value in filled_slots.values.items()
+            if str(value.value).strip()
+        }
+
+    def _normalize_text(self, text: str) -> str:
+        value = str(text or '').strip()
+        if not value:
+            return ''
+        if not value.endswith(('。', '？', '!', '！')):
+            value += '。'
+        return value
+
+    def _simple_tokenize(self, text: str) -> List[str]:
+        return [chunk for chunk in _PUNCT_RE.sub(' ', text).split() if chunk]
+
+    def _quick_grammar_checks(self, text: str) -> List[str]:
+        violations: List[str] = []
+        if '。。' in text:
+            violations.append('double_period')
+        if '、、' in text:
+            violations.append('duplicated_punctuation')
+        if 'です。です' in text:
+            violations.append('duplicated_copula')
+        return violations

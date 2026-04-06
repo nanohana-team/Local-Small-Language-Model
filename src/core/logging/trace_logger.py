@@ -3,13 +3,32 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:
+    ZoneInfo = None
+    ZoneInfoNotFoundError = Exception
 
-JST = ZoneInfo("Asia/Tokyo")
+
+def _build_jst():
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo("Asia/Tokyo")
+        except ZoneInfoNotFoundError:
+            pass
+    return timezone(timedelta(hours=9), name="JST")
+
+
+JST = _build_jst()
+
+
+def now_jst_iso() -> str:
+    return datetime.now(JST).isoformat()
 
 
 def now_jst_iso() -> str:
