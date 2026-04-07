@@ -108,12 +108,21 @@ class SlotFiller:
     }
 
     BAD_TOPIC_WORDS: Set[str] = {
-        "どう", "どこ", "いつ", "なに", "何", "それ", "これ", "あれ", "とも", "か", "です", "？", "。", "、"
+        "どう", "どこ", "いつ", "なに", "何", "それ", "これ", "あれ", "この", "その", "あの",
+        "とも", "か", "です", "？", "。", "、", "何か", "何も", "〇〇", "もの", "こと", "一番", "色々"
     }
 
     BAD_PREDICATE_WORDS: Set[str] = {
-        "どう", "どこ", "いつ", "なに", "何", "それ", "これ", "あれ", "今日", "今日は", "明日", "昨日"
+        "どう", "どこ", "いつ", "なに", "何", "それ", "これ", "あれ", "この", "その", "あの",
+        "今日", "今日は", "明日", "昨日"
     }
+
+    LOW_VALUE_REFERENTIAL_WORDS: Set[str] = {
+        "この", "その", "あの", "それ", "これ", "あれ", "ここ", "そこ", "あそこ",
+        "何か", "何も", "もの", "こと", "一番", "色々", "〇〇", "どれ", "どんな"
+    }
+
+    LOW_VALUE_ENDINGS: Tuple[str, ...] = ("は", "が", "を", "に", "で", "の", "も", "って", "んだ", "かな", "よね", "っけ")
 
     def __init__(self, config: Optional[SlotFillerConfig] = None) -> None:
         self.config = config or SlotFillerConfig()
@@ -1186,6 +1195,15 @@ class SlotFiller:
             )
             return
 
+        normalized_value = str(value).strip()
+        if self._is_low_value_slot_value(slot_name=slot_name, value=normalized_value):
+            LOGGER.debug(
+                "slot_filler.set_slot.skip slot=%s value=%s reason=low_value_slot_candidate",
+                slot_name,
+                normalized_value,
+            )
+            return
+
         current = values.get(slot_name)
         if current is None:
             LOGGER.debug(
@@ -1237,6 +1255,26 @@ class SlotFiller:
             value,
             confidence,
         )
+
+    def _is_low_value_slot_value(self, *, slot_name: str, value: str) -> bool:
+        text = str(value or '').strip()
+        if not text:
+            return True
+        if text in {'？', '?', '。', '、'}:
+            return True
+        if slot_name in {'topic', 'target', 'state', 'predicate', 'cause', 'manner'} and text in self.LOW_VALUE_REFERENTIAL_WORDS:
+            return True
+        if slot_name in {'topic', 'target', 'state', 'cause', 'manner'} and text in self.BAD_TOPIC_WORDS:
+            return True
+        if slot_name == 'predicate' and text in self.BAD_PREDICATE_WORDS:
+            return True
+        if slot_name in {'topic', 'target', 'state', 'cause', 'manner'} and len(text) <= 2 and all('ぁ' <= ch <= 'ん' or ch == 'ー' for ch in text):
+            return True
+        if slot_name in {'topic', 'target', 'state', 'cause', 'manner'} and len(text) <= 3 and any(text.endswith(ending) for ending in self.LOW_VALUE_ENDINGS):
+            return True
+        if text == '〇〇' or text.startswith('〇〇'):
+            return True
+        return False
 
 
 def fill_slots(

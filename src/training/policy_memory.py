@@ -10,6 +10,7 @@ from typing import Dict, List, Mapping, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from src.core.schema import FilledSlots, IntentPlan, RealizationCandidate
+from src.training.contamination_guard import assess_policy_memory_record
 
 LOGGER = logging.getLogger(__name__)
 JST = ZoneInfo('Asia/Tokyo')
@@ -35,6 +36,11 @@ _GENERIC_LOW_VALUE_TEXTS: Tuple[str, ...] = (
     'それについては考えられます。',
 )
 _ANCHOR_SLOT_KEYS: Tuple[str, ...] = ('topic', 'predicate', 'target', 'state')
+_LOW_VALUE_SLOT_WORDS: Tuple[str, ...] = (
+    'この', 'その', 'あの', 'それ', 'これ', 'あれ', 'ここ', 'そこ', 'あそこ',
+    '何か', '何も', 'もの', 'こと', '一番', '色々', '〇〇', 'どれ', 'どんな',
+)
+_LOW_VALUE_SLOT_ENDINGS: Tuple[str, ...] = ('は', 'が', 'を', 'に', 'で', 'の', 'も', 'って', 'んだ', 'かな', 'よね', 'っけ')
 
 
 @dataclass(slots=True)
@@ -66,6 +72,9 @@ class PolicyMemoryMatch:
 @dataclass(slots=True)
 class PolicyMemoryConfig:
     min_match_score: float = 0.55
+    quarantine_path: str = 'runtime/policy_memory_quarantine.jsonl'
+    contamination_watch_threshold: float = 0.45
+    contamination_danger_threshold: float = 0.74
     max_suggestions: int = 3
     max_records_per_key: int = 12
     teacher_reward_scale: float = 1.0
@@ -76,11 +85,15 @@ class PolicyMemoryConfig:
     selected_response_min_reward_total: float = 0.42
     selected_response_low_external_threshold: float = 0.50
     selected_response_low_external_scale: float = 0.10
+    teacher_hard_reject_external: float = 0.05
+    teacher_min_reward_total: float = 0.46
     min_suggest_weight: float = 0.12
     min_suggest_external: float = 0.28
     min_exact_slot_hits: int = 1
     min_anchor_slot_hits: int = 1
     require_anchor_slot_match: bool = True
+    min_anchor_mentions_in_text: int = 1
+    anchor_free_external_threshold: float = 0.82
 
 
 class PolicyMemoryStore:
@@ -94,6 +107,7 @@ class PolicyMemoryStore:
         self.path = Path(path)
         self.config = config or PolicyMemoryConfig()
         self.records: List[PolicyMemoryRecord] = []
+        self.quarantine_path = Path(self.config.quarantine_path)
         if autoload:
             self.load()
 
@@ -116,9 +130,10 @@ class PolicyMemoryStore:
             text = str(item.get('text', '') or '').strip()
             if not text:
                 continue
+            sanitized_slots = self._stable_slots(dict(item.get('slots', {}) or {}))
             record = PolicyMemoryRecord(
                 intent=str(item.get('intent', 'unknown') or 'unknown'),
-                slots={str(k): str(v) for k, v in dict(item.get('slots', {}) or {}).items() if str(v).strip()},
+                slots=sanitized_slots,
                 text=text,
                 source=str(item.get('source', 'teacher_target') or 'teacher_target'),
                 template_id=str(item.get('template_id', '') or ''),
@@ -130,9 +145,27 @@ class PolicyMemoryStore:
                 created_at=str(item.get('created_at', '') or ''),
                 updated_at=str(item.get('updated_at', '') or ''),
             )
+            if not record.slots:
+                continue
             if self._is_generic_low_value_text(record.text):
                 continue
+            if not self._has_meaningful_anchor(record.slots):
+                continue
+            if self._count_anchor_mentions(record.text, record.slots) < int(self.config.min_anchor_mentions_in_text) and record.last_external < float(self.config.anchor_free_external_threshold):
+                continue
             if record.weight < float(self.config.min_suggest_weight) and record.last_external < float(self.config.min_suggest_external):
+                continue
+            risk = assess_policy_memory_record(
+                intent=record.intent,
+                slots=record.slots,
+                text=record.text,
+                source=record.source,
+                reward_total=record.last_reward_total,
+                external_score=record.last_external,
+                watch_threshold=float(self.config.contamination_watch_threshold),
+                danger_threshold=float(self.config.contamination_danger_threshold),
+            )
+            if risk.status != 'safe':
                 continue
             records.append(record)
         self.records = records
@@ -163,12 +196,37 @@ class PolicyMemoryStore:
             return False
 
         slot_signature = self._stable_slots(slots)
+        if not slot_signature:
+            LOGGER.info('policy_memory.remember_skipped source=%s reason=no_meaningful_slots text=%s', source, cleaned_text)
+            return False
         reward_total = max(0.0, min(1.0, float(reward_total)))
         internal_score = max(0.0, min(1.0, float(internal_score)))
         external_score = max(0.0, min(1.0, float(external_score)))
 
         source_scale = self.config.teacher_reward_scale if source == 'teacher_target' else self.config.response_reward_scale
         blended_weight = max(0.0, min(1.0, reward_total * source_scale))
+
+        anchor_mentions = self._count_anchor_mentions(cleaned_text, slot_signature)
+
+        if source == 'teacher_target':
+            if external_score <= float(self.config.teacher_hard_reject_external) and reward_total < float(self.config.teacher_min_reward_total):
+                LOGGER.info(
+                    'policy_memory.remember_skipped source=%s reason=teacher_low_quality reward_total=%.4f external=%.4f text=%s',
+                    source,
+                    reward_total,
+                    external_score,
+                    cleaned_text,
+                )
+                return False
+            if anchor_mentions < int(self.config.min_anchor_mentions_in_text) and external_score < float(self.config.anchor_free_external_threshold):
+                LOGGER.info(
+                    'policy_memory.remember_skipped source=%s reason=no_anchor_mention external=%.4f text=%s slots=%s',
+                    source,
+                    external_score,
+                    cleaned_text,
+                    slot_signature,
+                )
+                return False
 
         if source == 'selected_response':
             if external_score <= float(self.config.selected_response_hard_reject_external):
@@ -189,6 +247,48 @@ class PolicyMemoryStore:
                 return False
             if external_score < float(self.config.selected_response_low_external_threshold):
                 blended_weight *= max(0.0, min(1.0, float(self.config.selected_response_low_external_scale)))
+            if anchor_mentions < int(self.config.min_anchor_mentions_in_text) and external_score < float(self.config.anchor_free_external_threshold):
+                LOGGER.info(
+                    'policy_memory.remember_skipped source=%s reason=no_anchor_mention external=%.4f text=%s slots=%s',
+                    source,
+                    external_score,
+                    cleaned_text,
+                    slot_signature,
+                )
+                return False
+
+        risk = assess_policy_memory_record(
+            intent=intent,
+            slots=slot_signature,
+            text=cleaned_text,
+            source=source,
+            reward_total=reward_total,
+            external_score=external_score,
+            watch_threshold=float(self.config.contamination_watch_threshold),
+            danger_threshold=float(self.config.contamination_danger_threshold),
+        )
+        if risk.status != 'safe':
+            self._append_quarantine_record(
+                {
+                    'intent': str(intent or 'unknown'),
+                    'slots': dict(slot_signature),
+                    'text': cleaned_text,
+                    'source': source,
+                    'template_id': template_id,
+                    'reward_total': reward_total,
+                    'internal_score': internal_score,
+                    'external_score': external_score,
+                    'risk_assessment': risk.to_dict(),
+                }
+            )
+            LOGGER.info(
+                'policy_memory.remember_skipped source=%s reason=contamination_risk status=%s risk=%.4f text=%s',
+                source,
+                risk.status,
+                risk.risk_score,
+                cleaned_text,
+            )
+            return False
 
         now = datetime.now(JST).isoformat(timespec='seconds')
         existing = self._find_record(intent=intent, slots=slot_signature, text=cleaned_text, source=source)
@@ -402,24 +502,47 @@ class PolicyMemoryStore:
         keep = set(id(item) for item in grouped[: self.config.max_records_per_key])
         self.records = [record for record in self.records if (record.intent != intent or record.slots != dict(slots) or id(record) in keep)]
 
+    def _filled_slots_to_dict(self, filled_slots: FilledSlots) -> Dict[str, str]:
+        return self._stable_slots(
+            {
+                str(name): str(value.value).strip()
+                for name, value in filled_slots.values.items()
+                if str(value.value).strip()
+            }
+        )
+
+    def _has_meaningful_anchor(self, slots: Mapping[str, str]) -> bool:
+        return any(str(slots.get(key, '')).strip() for key in _ANCHOR_SLOT_KEYS)
+
+    def _count_anchor_mentions(self, text: str, slots: Mapping[str, str]) -> int:
+        normalized_text = self._normalize_text(text)
+        return sum(1 for key in _ANCHOR_SLOT_KEYS if slots.get(key) and str(slots[key]) in normalized_text)
+
+    def _is_low_value_slot_value(self, value: str) -> bool:
+        text = str(value or '').strip()
+        if not text:
+            return True
+        if text in _LOW_VALUE_SLOT_WORDS:
+            return True
+        if text.startswith('〇〇'):
+            return True
+        if len(text) <= 2 and all('ぁ' <= ch <= 'ん' or ch == 'ー' for ch in text):
+            return True
+        if len(text) <= 3 and any(text.endswith(ending) for ending in _LOW_VALUE_SLOT_ENDINGS):
+            return True
+        return False
+
     def _stable_slots(self, slots: Mapping[str, str]) -> Dict[str, str]:
         stable: Dict[str, str] = {}
         raw = {str(k): str(v).strip() for k, v in dict(slots or {}).items() if str(v).strip()}
         for key in _SLOT_PRIORITY:
             value = raw.get(key, '')
-            if value:
+            if value and not self._is_low_value_slot_value(value):
                 stable[key] = value
         for key in sorted(raw):
-            if key not in stable:
+            if key not in stable and not self._is_low_value_slot_value(raw[key]):
                 stable[key] = raw[key]
         return stable
-
-    def _filled_slots_to_dict(self, filled_slots: FilledSlots) -> Dict[str, str]:
-        return {
-            str(name): str(value.value).strip()
-            for name, value in filled_slots.values.items()
-            if str(value.value).strip()
-        }
 
     def _normalize_text(self, text: str) -> str:
         value = str(text or '').strip()
@@ -431,6 +554,13 @@ class PolicyMemoryStore:
 
     def _simple_tokenize(self, text: str) -> List[str]:
         return [chunk for chunk in _PUNCT_RE.sub(' ', text).split() if chunk]
+
+    def _append_quarantine_record(self, record: Mapping[str, object]) -> None:
+        path = self.quarantine_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps(dict(record), ensure_ascii=False, separators=(',', ':')))
+            handle.write('\n')
 
     def _quick_grammar_checks(self, text: str) -> List[str]:
         violations: List[str] = []

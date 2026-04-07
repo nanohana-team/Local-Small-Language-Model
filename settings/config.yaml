@@ -14,3 +14,7 @@ llm-api-order:
   - gpt-5.4-mini
   - gpt-5-mini
   - "local:OpenPipe/Qwen3-14B-Instruct"
+
+llm-api-higher-order:
+  - gemini-3.1-pro
+  - gpt-5.4

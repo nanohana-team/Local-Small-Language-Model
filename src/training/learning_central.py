@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from time import perf_counter
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,12 +12,16 @@ from zoneinfo import ZoneInfo
 
 from src.apps.run_minimal_chat import (
     SurfaceNormalizer,
+    build_decision_trace,
     build_dialogue_state_after,
     build_episode_actions,
     build_slot_trace,
     build_tokenization_result,
     build_tokens,
+    _attach_stage_metrics_to_actions,
+    _build_dict_update_events_from_unknown_learning,
 )
+from src.core.logging.audit_helpers import build_dict_update_event, build_stage_metric, build_turn_audit_summary
 from src.core.logging.trace_logger import JsonlTraceLogger
 from src.core.planner.intent_planner import IntentPlannerConfig, plan_intent
 from src.core.recall.semantic_recall import SemanticRecallConfig, recall_semantics
@@ -185,7 +190,9 @@ def run_learning_episode(
     session_id = session_id or new_session_id('learnsess')
     turn_id = new_turn_id('learnturn')
     episode_id = new_episode_id('learnep')
+    stage_metrics: list[dict[str, object]] = []
 
+    _stage_started = perf_counter()
     tokenization_result = build_tokenization_result(
         raw_text=raw_text,
         explicit_words=explicit_words,
@@ -201,6 +208,25 @@ def run_learning_episode(
             explicit_words=explicit_words,
             normalizer=normalizer,
         )
+    stage_metrics.append(
+        build_stage_metric(
+            stage='tokenize',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(tokenization_result.tokenization),
+            kept_count=len(tokenization_result.normalized_tokens),
+            dropped_count=len(tokenization_result.unknown_spans),
+            expand_reason_codes=['retokenized_after_unknown_learning'] if unknown_word_learning.get('retokenized') else [],
+            converge_reason_codes=['unknown_spans_detected'] if tokenization_result.unknown_spans else [],
+            rule_ids=['surface_normalization'],
+            dict_feature_ids=['surface_forms', 'aliases'],
+            metadata={
+                'unknown_span_count': len(tokenization_result.unknown_spans),
+                'applied_word_count': len(list(unknown_word_learning.get('applied_words', []) or [])),
+                'quarantined_count': len(list(unknown_word_learning.get('quarantined_records', []) or [])),
+                'relearned_count': len(list(unknown_word_learning.get('relearned_words', []) or [])),
+            },
+        )
+    )
     tokens = list(tokenization_result.normalized_tokens)
     if not tokens:
         raise ValueError('No tokens could be built from the given learning input.')
@@ -233,7 +259,25 @@ def run_learning_episode(
     surface_config = build_dataclass_config(SurfaceRealizerConfig, get_setting(settings, 'pipeline', 'surface_realizer', default={}))
     scorer_config = build_dataclass_config(BasicScorerConfig, get_setting(settings, 'pipeline', 'basic_scorer', default={}))
 
+    _stage_started = perf_counter()
     intent_plan = plan_intent(input_state=input_state, dialogue_state=dialogue_state_current, config=intent_planner_config)
+    stage_metrics.append(
+        build_stage_metric(
+            stage='intent',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=6,
+            kept_count=1,
+            dropped_count=5,
+            converge_reason_codes=[str(intent_plan.intent)],
+            rule_ids=['intent_planner_rule_v1'],
+            metadata={
+                'confidence': float(intent_plan.confidence),
+                'policy_hint': str(intent_plan.response_policy_hint),
+                'required_slots': list(intent_plan.required_slots),
+            },
+        )
+    )
+    _stage_started = perf_counter()
     recall_result = recall_semantics(
         input_state=input_state,
         lexicon=lexicon,
@@ -241,6 +285,25 @@ def run_learning_episode(
         intent_plan=intent_plan,
         config=recall_config,
     )
+    _recall_keep_count = min(8, len(recall_result.candidates))
+    stage_metrics.append(
+        build_stage_metric(
+            stage='recall',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(recall_result.candidates),
+            kept_count=_recall_keep_count,
+            dropped_count=max(0, len(recall_result.candidates) - _recall_keep_count),
+            expand_reason_codes=['input_seed', 'relation_expand', 'axis_probe'],
+            converge_reason_codes=['rank_top_k'],
+            rule_ids=['semantic_recall_v1'],
+            dict_feature_ids=['relations', 'axis', 'grammar'],
+            metadata={
+                'seed_count': len(recall_result.seeds),
+                'seed_words': list(recall_result.seeds),
+            },
+        )
+    )
+    _stage_started = perf_counter()
     filled_slots = fill_slots(
         input_state=input_state,
         recall_result=recall_result,
@@ -249,11 +312,46 @@ def run_learning_episode(
         dialogue_state=dialogue_state_current,
         config=slot_filler_config,
     )
+    _slot_count = len(filled_slots.values) + len(filled_slots.missing_required) + len(filled_slots.optional_unfilled)
+    stage_metrics.append(
+        build_stage_metric(
+            stage='slot',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=_slot_count,
+            kept_count=len(filled_slots.values),
+            dropped_count=len(filled_slots.missing_required) + len(filled_slots.optional_unfilled),
+            converge_reason_codes=['slot_frame_resolution'],
+            rule_ids=['slot_filler_v1'],
+            dict_feature_ids=['slots', 'grammar'],
+            metadata={
+                'predicate': str(filled_slots.frame.predicate or ''),
+                'predicate_type': str(filled_slots.frame.predicate_type or ''),
+            },
+        )
+    )
+    _stage_started = perf_counter()
     surface_plan, base_candidates = realize_surface(
         filled_slots=filled_slots,
         intent_plan=intent_plan,
         lexicon=lexicon,
         config=surface_config,
+    )
+    stage_metrics.append(
+        build_stage_metric(
+            stage='surface',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(base_candidates),
+            kept_count=min(1, len(base_candidates)),
+            dropped_count=max(0, len(base_candidates) - 1),
+            expand_reason_codes=['template_variant_generation'],
+            converge_reason_codes=['candidate_scoring_pending'],
+            rule_ids=['surface_realizer_v1'],
+            dict_feature_ids=['surface_forms', 'style_tags'],
+            metadata={
+                'template_id': str(surface_plan.template_id or ''),
+                'sentence_count': int(surface_plan.sentence_count),
+            },
+        )
     )
 
     policy_memory_matches: List[Dict[str, object]] = []
@@ -276,6 +374,7 @@ def run_learning_episode(
 
     merged_candidates = _merge_candidates(base_candidates, memory_candidates)
 
+    _stage_started = perf_counter()
     base_response, scored_candidates = choose_best_response(
         input_state=input_state,
         intent_plan=intent_plan,
@@ -284,8 +383,25 @@ def run_learning_episode(
         config=scorer_config,
         recent_texts=recent_response_texts,
     )
+    stage_metrics.append(
+        build_stage_metric(
+            stage='scoring',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(scored_candidates),
+            kept_count=1 if scored_candidates else 0,
+            dropped_count=max(0, len(scored_candidates) - 1),
+            converge_reason_codes=['best_total_score'],
+            rule_ids=['basic_scorer_v1'],
+            dict_feature_ids=['score_breakdown', 'policy_memory'],
+            metadata={
+                'base_response_total': float(base_response.score.total),
+                'base_response_policy': str(base_response.policy),
+            },
+        )
+    )
 
     used_slots_for_target = _filled_slot_strings(filled_slots)
+    _stage_started = perf_counter()
     generated_target = target_generator.generate(
         user_input=raw_text,
         intent=intent_plan.intent,
@@ -294,6 +410,22 @@ def run_learning_episode(
             'input_tokens': list(input_state.normalized_tokens or input_state.tokens),
             'candidate_count': len(scored_candidates),
         },
+    )
+
+    stage_metrics.append(
+        build_stage_metric(
+            stage='target_generation',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(scored_candidates),
+            kept_count=1,
+            dropped_count=max(0, len(scored_candidates) - 1),
+            converge_reason_codes=['teacher_target_generated'],
+            rule_ids=['target_generator_v1'],
+            metadata={
+                'target_source': str(generated_target.source),
+                'target_model': str(generated_target.model),
+            },
+        )
     )
 
     teacher_guidance = teacher_reranker.rerank(
@@ -365,6 +497,7 @@ def run_learning_episode(
         'teacher_guidance': dataclass_to_dict(teacher_guidance),
         'action_bandit': dict(bandit_decision_debug or {}),
     }
+    _stage_started = perf_counter()
     evaluation = [
         external_evaluator.evaluate(
             user_input=raw_text,
@@ -373,6 +506,21 @@ def run_learning_episode(
         )
     ]
 
+    stage_metrics.append(
+        build_stage_metric(
+            stage='evaluation',
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(evaluation),
+            kept_count=len(evaluation),
+            dropped_count=0,
+            converge_reason_codes=['external_evaluator_complete'],
+            rule_ids=['external_evaluator_v1'],
+            metadata={
+                'evaluator_names': [str(item.evaluator_name) for item in evaluation],
+                'scores': [float(item.score) for item in evaluation],
+            },
+        )
+    )
     reward = reward_aggregator.aggregate(response=response, evaluation=evaluation)
     slot_trace = build_slot_trace(filled_slots)
     actions = build_episode_actions(
@@ -382,6 +530,24 @@ def run_learning_episode(
         surface_plan=surface_plan,
         scored_candidates=scored_candidates,
         response=response,
+    )
+    _attach_stage_metrics_to_actions(actions, stage_metrics)
+    audit_summary = build_turn_audit_summary(
+        input_text=raw_text,
+        response_text=response.text,
+        stage_metrics=stage_metrics,
+        actions=actions,
+        scored_candidates=scored_candidates,
+        missing_required=filled_slots.missing_required,
+        unknown_word_learning=unknown_word_learning,
+        reward_total=reward.total,
+        reward_internal=reward.internal.total,
+        reward_external=reward.external.total,
+    )
+    dict_update_events = _build_dict_update_events_from_unknown_learning(
+        source_turn_id=turn_id,
+        response_score_total=float(response.score.total),
+        unknown_word_learning=unknown_word_learning,
     )
     if actions and bandit_decision_debug:
         for action in actions:
@@ -432,6 +598,28 @@ def run_learning_episode(
         bandit_path = action_bandit.save()
         LOGGER.info('learning_episode.action_bandit_saved path=%s episode_id=%s', bandit_path, episode_id)
 
+    selection_source = 'scorer'
+    if runtime_config.use_action_bandit and action_bandit is not None and scored_candidates:
+        selection_source = 'action_bandit'
+    elif teacher_guidance.overridden and scored_candidates:
+        selection_source = 'teacher_override'
+    decision_trace = build_decision_trace(
+        scored_candidates=scored_candidates,
+        response=response,
+        filled_slots=filled_slots,
+        recall_result=recall_result,
+        reward=reward,
+        evaluation=evaluation,
+        selection_source=selection_source,
+        selected_index=selected_candidate_index,
+        selection_metadata={
+            'mode': 'learning',
+            'teacher_guidance': dataclass_to_dict(teacher_guidance),
+            'action_bandit': dict(bandit_decision_debug or {}),
+            'policy_memory_match_count': len(policy_memory_matches),
+        },
+    )
+
     trace = TraceLog(
         session_id=session_id,
         turn_id=turn_id,
@@ -451,6 +639,7 @@ def run_learning_episode(
         slot_trace=slot_trace,
         response=response,
         reward=reward,
+        decision_trace=decision_trace,
         evaluation=evaluation,
         debug={
             'mode': 'learning',
@@ -459,8 +648,12 @@ def run_learning_episode(
             'tokenization': [dataclass_to_dict(item) for item in tokenization_result.tokenization],
             'unknown_spans': [dataclass_to_dict(item) for item in tokenization_result.unknown_spans],
             'unknown_word_learning': unknown_word_learning,
+            'stage_metrics': stage_metrics,
+            'audit_summary': audit_summary,
+            'dict_update_events': dict_update_events,
             'response_score': dataclass_to_dict(response.score),
             'reward': dataclass_to_dict(reward),
+            'decision_trace': dataclass_to_dict(decision_trace),
             'slot_trace': dataclass_to_dict(slot_trace),
             'evaluation_context': evaluation_context,
             'teacher_target': dataclass_to_dict(generated_target),
@@ -484,6 +677,19 @@ def run_learning_episode(
             rotate_on_start=False,
         )
         trace_path = trace_logger.append_episode_trace(trace)
+        trace_logger.append_turn_audit_summary(
+            session_id=session_id,
+            turn_id=turn_id,
+            episode_id=episode_id,
+            summary=audit_summary,
+        )
+        for event in dict_update_events:
+            trace_logger.append_dict_update(
+                session_id=session_id,
+                turn_id=turn_id,
+                episode_id=episode_id,
+                dict_update=event,
+            )
         LOGGER.info('learning_episode.trace_saved path=%s episode_id=%s', trace_path, episode_id)
 
     if runtime_config.save_dataset:

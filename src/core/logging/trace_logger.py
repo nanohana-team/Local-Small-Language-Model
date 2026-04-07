@@ -28,10 +28,6 @@ JST = _build_jst()
 
 
 def now_jst_iso() -> str:
-    return datetime.now(JST).isoformat()
-
-
-def now_jst_iso() -> str:
     return datetime.now(JST).isoformat(timespec="seconds")
 
 
@@ -169,6 +165,39 @@ class JsonlTraceLogger:
 
     def append_episode_trace(self, trace: Any) -> Path:
         return self.append_trace(trace)
+
+
+    def append_dict_update(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        dict_update: Mapping[str, Any],
+        episode_id: str = "",
+    ) -> Path:
+        return self.append_event(
+            "dict_update",
+            payload={"dict_update": _to_jsonable(dict_update)},
+            session_id=session_id,
+            turn_id=turn_id,
+            episode_id=episode_id,
+        )
+
+    def append_turn_audit_summary(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        summary: Mapping[str, Any],
+        episode_id: str = "",
+    ) -> Path:
+        return self.append_event(
+            "turn_audit_summary",
+            payload={"audit_summary": _to_jsonable(summary)},
+            session_id=session_id,
+            turn_id=turn_id,
+            episode_id=episode_id,
+        )
 
     def append_reward(
         self,

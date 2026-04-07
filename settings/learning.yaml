@@ -15,6 +15,9 @@ learning:
 
 policy_memory:
   min_match_score: 0.55
+  quarantine_path: runtime/policy_memory_quarantine.jsonl
+  contamination_watch_threshold: 0.45
+  contamination_danger_threshold: 0.74
   max_suggestions: 3
   max_records_per_key: 12
   teacher_reward_scale: 1.0
@@ -25,6 +28,10 @@ policy_memory:
   selected_response_min_reward_total: 0.42
   selected_response_low_external_threshold: 0.50
   selected_response_low_external_scale: 0.10
+  teacher_hard_reject_external: 0.05
+  teacher_min_reward_total: 0.46
+  min_anchor_mentions_in_text: 1
+  anchor_free_external_threshold: 0.82
   min_suggest_weight: 0.12
   min_suggest_external: 0.28
   min_exact_slot_hits: 1

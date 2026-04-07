@@ -230,16 +230,6 @@ class BasicScorer:
 
         clamped_total = max(0.0, min(1.0, total))
 
-        scored_candidate = RealizationCandidate(
-            text=candidate.text,
-            token_sequence=list(candidate.token_sequence),
-            template_id=candidate.template_id,
-            grammar_violations=list(candidate.grammar_violations),
-            slot_coverage=candidate.slot_coverage,
-            semantic_score=candidate.semantic_score,
-            final_score=clamped_total,
-        )
-
         breakdown = ScoreBreakdown(
             semantic_consistency=semantic_consistency,
             slot_fitness=slot_fitness,
@@ -248,6 +238,19 @@ class BasicScorer:
             policy_fitness=policy_fitness,
             total=clamped_total,
             reasons=reasons,
+        )
+
+        scored_candidate = RealizationCandidate(
+            text=candidate.text,
+            token_sequence=list(candidate.token_sequence),
+            template_id=candidate.template_id,
+            grammar_violations=list(candidate.grammar_violations),
+            slot_coverage=candidate.slot_coverage,
+            semantic_score=candidate.semantic_score,
+            final_score=clamped_total,
+            score_breakdown=breakdown,
+            internal_reward_estimate=clamped_total,
+            selection_metadata=dict(getattr(candidate, 'selection_metadata', {}) or {}),
         )
 
         LOGGER.debug(

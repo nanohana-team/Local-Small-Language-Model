@@ -6,6 +6,7 @@ import os
 import logging
 import re
 import sys
+from time import perf_counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from src.core.io.lsd_lexicon import load_lexicon_container
+from src.core.logging.audit_helpers import build_dict_update_event, build_stage_metric, build_turn_audit_summary
 from src.core.logging.trace_logger import JsonlTraceLogger
 from src.core.planner.intent_planner import IntentPlannerConfig, plan_intent
 from src.core.recall.semantic_recall import SemanticRecallConfig, recall_semantics
@@ -21,6 +23,8 @@ from src.core.scoring.basic_scorer import BasicScorerConfig, choose_best_respons
 from src.core.schema import (
     ActionCandidateSnapshot,
     AxisVector,
+    DecisionCandidateTrace,
+    DecisionTrace,
     DialogueState,
     EpisodeAction,
     ExternalRewardBreakdown,
@@ -638,10 +642,13 @@ class SurfaceNormalizer:
             "enabled": True,
             "examined_spans": list(learning_result.examined_spans),
             "applied_words": list(learning_result.applied_words),
+            "relearned_words": list(getattr(learning_result, "relearned_words", []) or []),
+            "quarantined_records": list(getattr(learning_result, "quarantined_records", []) or []),
             "skipped_spans": list(learning_result.skipped_spans),
             "pending_records": list(learning_result.pending_records),
             "overlay_path": learning_result.overlay_path,
             "pending_path": learning_result.pending_path,
+            "quarantine_path": str(getattr(getattr(self.unknown_word_learner, "config", None), "quarantine_path", "") or ""),
             "retokenized": bool(learning_result.applied_words),
         }
 
@@ -1467,12 +1474,16 @@ def build_episode_actions(
                 source="surface_realizer",
                 kept=kept,
                 dropped=not kept,
-                drop_reason="not_selected" if not kept else "",
+                drop_reason="lower_total_score" if not kept else "",
                 metadata={
                     "template_id": item.template_id,
                     "slot_coverage": float(item.slot_coverage),
                     "semantic_score": float(item.semantic_score),
                     "grammar_violations": list(item.grammar_violations),
+                    "score_breakdown": dataclass_to_dict(getattr(item, "score_breakdown", ScoreBreakdown())),
+                    "internal_reward_estimate": float(getattr(item, "internal_reward_estimate", 0.0) or 0.0),
+                    "selection_reasons": list(getattr(getattr(item, "score_breakdown", None), "reasons", []) or []),
+                    "score_gap_from_selected": max(0.0, float(response.score.total) - float(item.final_score)),
                 },
             )
         )
@@ -1504,6 +1515,150 @@ def build_episode_actions(
 
     return actions
 
+
+def _extract_selected_relation_paths(recall_result, response) -> List[List[str]]:
+    selected_tokens = {str(token).strip() for token in getattr(getattr(response, 'chosen_candidate', None), 'token_sequence', []) if str(token).strip()}
+    if not selected_tokens:
+        selected_tokens = {str(word).strip() for word in getattr(response, 'used_slots', {}).values() if str(word).strip()}
+    paths: List[List[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for candidate in getattr(recall_result, 'candidates', []) or []:
+        word = str(getattr(candidate, 'word', '') or '').strip()
+        relation_path = [str(item) for item in getattr(candidate, 'relation_path', []) if str(item).strip()]
+        if not relation_path:
+            continue
+        if selected_tokens and word and word not in selected_tokens and word not in str(getattr(response, 'text', '') or ''):
+            continue
+        path_key = tuple(relation_path)
+        if path_key in seen:
+            continue
+        seen.add(path_key)
+        paths.append(relation_path)
+    return paths[:8]
+
+
+def _build_selected_slot_evidence(filled_slots, response) -> Dict[str, Dict[str, Any]]:
+    evidence: Dict[str, Dict[str, Any]] = {}
+    used_slots = dict(getattr(response, 'used_slots', {}) or {})
+    for slot_name, slot_value in getattr(filled_slots, 'values', {}).items():
+        if used_slots and slot_name not in used_slots:
+            continue
+        evidence[str(slot_name)] = {
+            'value': str(slot_value.value),
+            'confidence': float(slot_value.confidence),
+            'source_candidate': str(slot_value.source_candidate),
+            'inferred': bool(slot_value.inferred),
+            'note': str(slot_value.note),
+        }
+    return evidence
+
+
+def build_decision_trace(
+    *,
+    scored_candidates: Sequence[RealizationCandidate],
+    response: ResponseResult,
+    filled_slots,
+    recall_result,
+    reward: RewardBreakdown,
+    evaluation: Sequence[Any] | None = None,
+    selection_source: str = 'scorer',
+    selected_index: Optional[int] = None,
+    selection_metadata: Optional[Dict[str, Any]] = None,
+) -> DecisionTrace:
+    candidate_list = list(scored_candidates or [])
+    if not candidate_list:
+        return DecisionTrace(
+            selection_source=str(selection_source or 'scorer'),
+            selected_text=str(response.text or ''),
+            selected_template_id=str(getattr(getattr(response, 'chosen_candidate', None), 'template_id', '') or ''),
+            selected_score=float(getattr(response.score, 'total', 0.0) or 0.0),
+            selected_reward_total=float(getattr(reward, 'total', 0.0) or 0.0),
+            selected_reward_internal=float(getattr(getattr(reward, 'internal', None), 'total', 0.0) or 0.0),
+            selected_reward_external=float(getattr(getattr(reward, 'external', None), 'total', 0.0) or 0.0),
+            selection_reason_codes=['no_candidates'],
+            metadata=dict(selection_metadata or {}),
+        )
+
+    ranked_indices = sorted(range(len(candidate_list)), key=lambda idx: float(candidate_list[idx].final_score), reverse=True)
+    ranked_position = {candidate_index: rank for rank, candidate_index in enumerate(ranked_indices, start=1)}
+    if selected_index is None:
+        for idx, item in enumerate(candidate_list):
+            if item.text == str(response.text or '') and item.template_id == str(getattr(getattr(response, 'chosen_candidate', None), 'template_id', item.template_id) or item.template_id):
+                selected_index = idx
+                break
+    if selected_index is None:
+        for idx, item in enumerate(candidate_list):
+            if item.text == str(response.text or ''):
+                selected_index = idx
+                break
+    if selected_index is None:
+        selected_index = ranked_indices[0]
+
+    best_score = float(candidate_list[ranked_indices[0]].final_score or 0.0)
+    second_score = float(candidate_list[ranked_indices[1]].final_score or 0.0) if len(ranked_indices) >= 2 else 0.0
+    compared_candidates: List[DecisionCandidateTrace] = []
+    for idx in ranked_indices:
+        item = candidate_list[idx]
+        selected = idx == selected_index
+        score_gap = max(0.0, best_score - float(item.final_score or 0.0))
+        rejected_reason_codes: List[str] = [] if selected else ['lower_total_score']
+        if not selected and score_gap > 0.0:
+            rejected_reason_codes.append(f'score_gap:{score_gap:.6f}')
+        reasons = list(getattr(getattr(item, 'score_breakdown', None), 'reasons', []) or [])
+        if not selected:
+            rejected_reason_codes.extend(reasons[:6])
+        compared_candidates.append(
+            DecisionCandidateTrace(
+                index=int(idx),
+                rank=int(ranked_position[idx]),
+                text=str(item.text or ''),
+                template_id=str(item.template_id or ''),
+                final_score=float(item.final_score or 0.0),
+                score_breakdown=getattr(item, 'score_breakdown', ScoreBreakdown()),
+                internal_reward_estimate=float(getattr(item, 'internal_reward_estimate', 0.0) or 0.0),
+                selected=selected,
+                rejected_reason_codes=rejected_reason_codes,
+                score_gap_from_best=score_gap,
+                metadata=dict(getattr(item, 'selection_metadata', {}) or {}),
+            )
+        )
+
+    selected_candidate = candidate_list[selected_index]
+    selection_reason_codes = list(getattr(getattr(selected_candidate, 'score_breakdown', None), 'reasons', []) or [])
+    if selection_source == 'action_bandit':
+        selection_reason_codes.insert(0, 'selection_overridden_by_action_bandit')
+    elif selection_source == 'teacher_override':
+        selection_reason_codes.insert(0, 'selection_overridden_by_teacher')
+    else:
+        selection_reason_codes.insert(0, 'highest_total_score')
+    if len(ranked_indices) >= 2:
+        selection_reason_codes.append(f'margin_vs_second:{max(0.0, best_score - second_score):.6f}')
+
+    evaluator_scores = [float(getattr(item, 'score', 0.0) or 0.0) for item in (evaluation or [])]
+    metadata = dict(selection_metadata or {})
+    metadata.setdefault('candidate_count', len(candidate_list))
+    metadata.setdefault('ranked_indices', ranked_indices)
+    if evaluator_scores:
+        metadata['external_evaluator_scores'] = evaluator_scores
+
+    return DecisionTrace(
+        selection_source=str(selection_source or 'scorer'),
+        selected_index=int(selected_index),
+        selected_text=str(selected_candidate.text or ''),
+        selected_template_id=str(selected_candidate.template_id or ''),
+        selected_score=float(selected_candidate.final_score or 0.0),
+        selected_reward_total=float(getattr(reward, 'total', 0.0) or 0.0),
+        selected_reward_internal=float(getattr(getattr(reward, 'internal', None), 'total', 0.0) or 0.0),
+        selected_reward_external=float(getattr(getattr(reward, 'external', None), 'total', 0.0) or 0.0),
+        margin_vs_second=max(0.0, best_score - second_score),
+        compared_candidates=compared_candidates,
+        selected_slot_evidence=_build_selected_slot_evidence(filled_slots, response),
+        selected_relation_paths=_extract_selected_relation_paths(recall_result, response),
+        selection_reason_codes=selection_reason_codes,
+        metadata=metadata,
+    )
+
+
 def build_dialogue_state_after(dialogue_state: DialogueState, intent_plan, filled_slots, response) -> DialogueState:
     state_after = deepcopy(dialogue_state)
     state_after.inferred_intent_history.append(intent_plan.intent)
@@ -1534,6 +1689,86 @@ def build_dialogue_state_after(dialogue_state: DialogueState, intent_plan, fille
     return state_after
 
 
+def _find_latest_entry_payload(records: Sequence[dict[str, object]], word: str) -> dict[str, object]:
+    latest: dict[str, object] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        entry = record.get('entry')
+        if not isinstance(entry, dict):
+            continue
+        entry_word = str(entry.get('word', record.get('surface', '')) or record.get('surface', '')).strip()
+        if entry_word == str(word or '').strip():
+            latest = dict(entry)
+    return latest
+
+
+def _build_dict_update_events_from_unknown_learning(
+    *,
+    source_turn_id: str,
+    response_score_total: float,
+    unknown_word_learning: dict[str, object],
+) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    pending_records = [item for item in list(unknown_word_learning.get('pending_records', []) or []) if isinstance(item, dict)]
+    applied_words = {str(item).strip() for item in list(unknown_word_learning.get('applied_words', []) or []) if str(item).strip()}
+    for record in [item for item in list(unknown_word_learning.get('quarantined_records', []) or []) if isinstance(item, dict)]:
+        entry = dict(record.get('entry', {}) or {})
+        risk = dict(record.get('risk_assessment', {}) or {})
+        entry_id = str(entry.get('word', record.get('surface', '')) or record.get('surface', '')).strip()
+        if not entry_id:
+            continue
+        events.append(
+            build_dict_update_event(
+                update_type='lexicon_candidate',
+                entry_id=entry_id,
+                source_turn_id=source_turn_id,
+                reason='unknown_word_quarantined',
+                pollution_risk=float(risk.get('risk_score', 1.0) or 1.0),
+                status='quarantined',
+                before={},
+                after=entry,
+                evaluation_score=response_score_total,
+                metadata={
+                    'surface': str(record.get('surface', '') or ''),
+                    'risk_assessment': risk,
+                    'next_action': str(record.get('next_action', '') or ''),
+                },
+            )
+        )
+    for word in sorted(applied_words):
+        entry_payload = _find_latest_entry_payload(pending_records, word)
+        risk = dict(entry_payload.get('meta', {}).get('risk_assessment', {}) or {}) if isinstance(entry_payload.get('meta', {}), dict) else {}
+        if not entry_payload:
+            entry_payload = {'word': word}
+        events.append(
+            build_dict_update_event(
+                update_type='lexicon_overlay',
+                entry_id=word,
+                source_turn_id=source_turn_id,
+                reason='unknown_word_promoted',
+                pollution_risk=float(risk.get('risk_score', 0.0) or 0.0),
+                status='applied',
+                before={},
+                after=entry_payload,
+                evaluation_score=response_score_total,
+                metadata={
+                    'overlay_path': str(unknown_word_learning.get('overlay_path', '') or ''),
+                },
+            )
+        )
+    return events
+
+
+def _attach_stage_metrics_to_actions(actions: Sequence[EpisodeAction], stage_metrics: Sequence[dict[str, object]]) -> None:
+    metrics_by_stage = {str(item.get('stage', '')).strip(): dict(item) for item in stage_metrics if isinstance(item, dict)}
+    for action in actions:
+        metric = metrics_by_stage.get(str(action.stage))
+        if not metric:
+            continue
+        action.metadata.setdefault('stage_metric', metric)
+
+
 def run_pipeline(
     args: argparse.Namespace,
     lexicon: LexiconContainer,
@@ -1554,18 +1789,40 @@ def run_pipeline(
         LOGGER.error("empty_input")
         raise ValueError("Input text is empty. Use --text or --words.")
 
+    stage_metrics: list[dict[str, object]] = []
+
     input_focus_config = build_dataclass_config(InputFocusConfig, get_setting(settings, "pipeline", "input_focus", default={}))
+    _stage_started = perf_counter()
     focus = choose_input_focus(raw_text=raw_text, normalizer=normalizer, config=input_focus_config)
     focused_raw_text = focus.focused_text or raw_text
+    stage_metrics.append(
+        build_stage_metric(
+            stage="input_focus",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(focus.segments),
+            kept_count=1 if focused_raw_text else 0,
+            dropped_count=max(0, len(focus.segments) - 1) if focus.used_segmentation else 0,
+            converge_reason_codes=[focus.reason] if str(focus.reason or '').strip() else [],
+            rule_ids=["input_focus_segmentation"] if focus.used_segmentation else ["input_focus_passthrough"],
+            metadata={
+                "used_segmentation": bool(focus.used_segmentation),
+                "has_alternative_question": bool(focus.has_alternative_question),
+                "question_like_segment_count": int(focus.question_like_segment_count),
+            },
+        )
+    )
     if focus.used_segmentation:
         LOGGER.info("input.focus used_segmentation=%s reason=%s focused=%s segment_count=%s", focus.used_segmentation, focus.reason, focused_raw_text, len(focus.segments))
 
+    _stage_started = perf_counter()
     tokenization_result = build_tokenization_result(raw_text=focused_raw_text, explicit_words=args.words, normalizer=normalizer)
     if focus.used_segmentation and len(focus.segments) >= 2:
         unknown_word_learning = {
             "enabled": bool(normalizer.unknown_word_learner),
             "examined_spans": [],
             "applied_words": [],
+            "relearned_words": [],
+            "quarantined_records": [],
             "skipped_spans": [],
             "pending_records": [],
             "retokenized": False,
@@ -1575,6 +1832,25 @@ def run_pipeline(
         unknown_word_learning = normalizer.maybe_learn_unknown_words(raw_text=focused_raw_text, tokenization_result=tokenization_result)
         if unknown_word_learning.get("retokenized"):
             tokenization_result = build_tokenization_result(raw_text=focused_raw_text, explicit_words=args.words, normalizer=normalizer)
+    stage_metrics.append(
+        build_stage_metric(
+            stage="tokenize",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(tokenization_result.tokenization),
+            kept_count=len(tokenization_result.normalized_tokens),
+            dropped_count=len(tokenization_result.unknown_spans),
+            expand_reason_codes=["retokenized_after_unknown_learning"] if unknown_word_learning.get("retokenized") else [],
+            converge_reason_codes=["unknown_spans_detected"] if tokenization_result.unknown_spans else [],
+            rule_ids=["surface_normalization"],
+            dict_feature_ids=["surface_forms", "aliases"],
+            metadata={
+                "unknown_span_count": len(tokenization_result.unknown_spans),
+                "applied_word_count": len(list(unknown_word_learning.get("applied_words", []) or [])),
+                "quarantined_count": len(list(unknown_word_learning.get("quarantined_records", []) or [])),
+                "relearned_count": len(list(unknown_word_learning.get("relearned_words", []) or [])),
+            },
+        )
+    )
     tokens = list(tokenization_result.normalized_tokens)
     LOGGER.info("input raw_text=%s", raw_text)
     if focus.used_segmentation and focused_raw_text != raw_text:
@@ -1649,7 +1925,25 @@ def run_pipeline(
     policy_memory_config = build_dataclass_config(PolicyMemoryConfig, get_setting(settings, "policy_memory", default={}))
     policy_memory_limit = max(1, int(get_setting(settings, "learning", "runtime", "policy_memory_limit", default=4)))
 
+    _stage_started = perf_counter()
     intent_plan = plan_intent(input_state=input_state, dialogue_state=dialogue_state, config=intent_planner_config)
+    stage_metrics.append(
+        build_stage_metric(
+            stage="intent",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=6,
+            kept_count=1,
+            dropped_count=5,
+            converge_reason_codes=[str(intent_plan.intent)],
+            rule_ids=["intent_planner_rule_v1"],
+            metadata={
+                "confidence": float(intent_plan.confidence),
+                "policy_hint": str(intent_plan.response_policy_hint),
+                "required_slots": list(intent_plan.required_slots),
+            },
+        )
+    )
+    _stage_started = perf_counter()
     recall_result = recall_semantics(
         input_state=input_state,
         lexicon=lexicon,
@@ -1657,6 +1951,25 @@ def run_pipeline(
         intent_plan=intent_plan,
         config=recall_config,
     )
+    _recall_keep_count = min(8, len(recall_result.candidates))
+    stage_metrics.append(
+        build_stage_metric(
+            stage="recall",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(recall_result.candidates),
+            kept_count=_recall_keep_count,
+            dropped_count=max(0, len(recall_result.candidates) - _recall_keep_count),
+            expand_reason_codes=["input_seed", "relation_expand", "axis_probe"],
+            converge_reason_codes=["rank_top_k"],
+            rule_ids=["semantic_recall_v1"],
+            dict_feature_ids=["relations", "axis", "grammar"],
+            metadata={
+                "seed_count": len(recall_result.seeds),
+                "seed_words": list(recall_result.seeds),
+            },
+        )
+    )
+    _stage_started = perf_counter()
     filled_slots = fill_slots(
         input_state=input_state,
         recall_result=recall_result,
@@ -1670,11 +1983,47 @@ def run_pipeline(
         dialogue_state=dialogue_state,
         filled_slots=filled_slots,
     )
+    _slot_count = len(filled_slots.values) + len(filled_slots.missing_required) + len(filled_slots.optional_unfilled)
+    stage_metrics.append(
+        build_stage_metric(
+            stage="slot",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=_slot_count,
+            kept_count=len(filled_slots.values),
+            dropped_count=len(filled_slots.missing_required) + len(filled_slots.optional_unfilled),
+            converge_reason_codes=["slot_frame_resolution"],
+            rule_ids=["slot_filler_v1"],
+            dict_feature_ids=["slots", "grammar", "topic_history"],
+            metadata={
+                "predicate": str(filled_slots.frame.predicate or ''),
+                "predicate_type": str(filled_slots.frame.predicate_type or ''),
+                "topic_history_applied": bool(topic_history_applied),
+            },
+        )
+    )
+    _stage_started = perf_counter()
     surface_plan, candidates = realize_surface(
         filled_slots=filled_slots,
         intent_plan=intent_plan,
         lexicon=lexicon,
         config=surface_config,
+    )
+    stage_metrics.append(
+        build_stage_metric(
+            stage="surface",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(candidates),
+            kept_count=min(1, len(candidates)),
+            dropped_count=max(0, len(candidates) - 1),
+            expand_reason_codes=["template_variant_generation"],
+            converge_reason_codes=["candidate_scoring_pending"],
+            rule_ids=["surface_realizer_v1"],
+            dict_feature_ids=["surface_forms", "style_tags"],
+            metadata={
+                "template_id": str(surface_plan.template_id or ''),
+                "sentence_count": int(surface_plan.sentence_count),
+            },
+        )
     )
 
     if focus.has_alternative_question:
@@ -1717,6 +2066,7 @@ def run_pipeline(
             LOGGER.info('policy_memory.augmented count=%s', len(memory_candidates))
             candidates = list(candidates) + list(memory_candidates)
 
+    _stage_started = perf_counter()
     response, scored_candidates = choose_best_response(
         input_state=input_state,
         intent_plan=intent_plan,
@@ -1724,6 +2074,22 @@ def run_pipeline(
         candidates=candidates,
         config=scorer_config,
         recent_texts=runtime_context.recent_response_texts() if runtime_context is not None else None,
+    )
+    stage_metrics.append(
+        build_stage_metric(
+            stage="scoring",
+            elapsed_ms=(perf_counter() - _stage_started) * 1000.0,
+            candidate_count=len(scored_candidates),
+            kept_count=1 if scored_candidates else 0,
+            dropped_count=max(0, len(scored_candidates) - 1),
+            converge_reason_codes=["best_total_score"],
+            rule_ids=["basic_scorer_v1"],
+            dict_feature_ids=["score_breakdown", "policy_memory"],
+            metadata={
+                "response_total": float(response.score.total),
+                "response_policy": str(response.policy),
+            },
+        )
     )
 
     if focus.used_segmentation and len(focus.segments) >= 2 and not focus.has_alternative_question:
@@ -1737,6 +2103,17 @@ def run_pipeline(
                 slot_coverage=0.9 if filled_slots.values else 0.7,
                 semantic_score=0.86,
                 final_score=max(0.78, response.score.total),
+                score_breakdown=ScoreBreakdown(
+                    semantic_consistency=max(response.score.semantic_consistency, 0.78),
+                    slot_fitness=max(response.score.slot_fitness, 0.60),
+                    grammar_fitness=max(response.score.grammar_fitness, 0.92),
+                    input_retention=max(response.score.input_retention, 0.52),
+                    policy_fitness=max(response.score.policy_fitness, 0.88),
+                    total=max(0.78, response.score.total),
+                    reasons=list(response.score.reasons),
+                ),
+                internal_reward_estimate=max(0.78, response.score.total),
+                selection_metadata={'source': 'long_context_override'},
             )
             response.text = override_text
             response.chosen_candidate = override_candidate
@@ -1780,6 +2157,17 @@ def run_pipeline(
             slot_coverage=chosen_candidate.slot_coverage,
             semantic_score=min(1.0, chosen_candidate.semantic_score + 0.04),
             final_score=chosen_candidate.final_score,
+            score_breakdown=ScoreBreakdown(
+                semantic_consistency=float(response.score.semantic_consistency),
+                slot_fitness=float(response.score.slot_fitness),
+                grammar_fitness=float(response.score.grammar_fitness),
+                input_retention=float(response.score.input_retention),
+                policy_fitness=float(response.score.policy_fitness),
+                total=float(response.score.total),
+                reasons=list(response.score.reasons),
+            ),
+            internal_reward_estimate=float(response.score.total),
+            selection_metadata={'source': 'response_accumulation'},
         )
         response.text = accumulated_text
         response.chosen_candidate = accumulated_candidate
@@ -1797,6 +2185,38 @@ def run_pipeline(
         surface_plan=surface_plan,
         scored_candidates=scored_candidates,
         response=response,
+    )
+    _attach_stage_metrics_to_actions(actions, stage_metrics)
+    audit_summary = build_turn_audit_summary(
+        input_text=raw_text,
+        response_text=response.text,
+        stage_metrics=stage_metrics,
+        actions=actions,
+        scored_candidates=scored_candidates,
+        missing_required=filled_slots.missing_required,
+        unknown_word_learning=unknown_word_learning,
+        reward_total=reward.total,
+        reward_internal=reward.internal.total,
+        reward_external=reward.external.total,
+    )
+    dict_update_events = _build_dict_update_events_from_unknown_learning(
+        source_turn_id=turn_id,
+        response_score_total=float(response.score.total),
+        unknown_word_learning=unknown_word_learning,
+    )
+    decision_trace = build_decision_trace(
+        scored_candidates=scored_candidates,
+        response=response,
+        filled_slots=filled_slots,
+        recall_result=recall_result,
+        reward=reward,
+        evaluation=evaluation,
+        selection_source='scorer',
+        selection_metadata={
+            'mode': 'chat',
+            'topic_history_applied': bool(topic_history_applied),
+            'policy_memory_match_count': len(policy_memory_matches),
+        },
     )
     dialogue_state_after = build_dialogue_state_after(
         dialogue_state=dialogue_state_before,
@@ -1855,6 +2275,7 @@ def run_pipeline(
         slot_trace=slot_trace,
         response=response,
         reward=reward,
+        decision_trace=decision_trace,
         evaluation=evaluation,
         debug={
             "lexicon_path": str(lexicon_path),
@@ -1865,6 +2286,9 @@ def run_pipeline(
             "tokenization": [dataclass_to_dict(item) for item in tokenization_result.tokenization],
             "unknown_spans": [dataclass_to_dict(item) for item in tokenization_result.unknown_spans],
             "unknown_word_learning": unknown_word_learning,
+            "stage_metrics": stage_metrics,
+            "audit_summary": audit_summary,
+            "dict_update_events": dict_update_events,
             "input_focus": {
                 "reason": focus.reason,
                 "used_segmentation": focus.used_segmentation,
@@ -1883,6 +2307,7 @@ def run_pipeline(
             },
             "response_score": dataclass_to_dict(response.score),
             "reward": dataclass_to_dict(reward),
+            "decision_trace": dataclass_to_dict(decision_trace),
             "slot_trace": dataclass_to_dict(slot_trace),
             "policy_memory_matches": policy_memory_matches,
             "topic_history_applied": topic_history_applied,
@@ -1905,6 +2330,19 @@ def run_pipeline(
             rotate_on_start=False,
         )
         trace_path = trace_logger.append_episode_trace(trace)
+        trace_logger.append_turn_audit_summary(
+            session_id=session_id,
+            turn_id=turn_id,
+            episode_id=episode_id,
+            summary=audit_summary,
+        )
+        for event in dict_update_events:
+            trace_logger.append_dict_update(
+                session_id=session_id,
+                turn_id=turn_id,
+                episode_id=episode_id,
+                dict_update=event,
+            )
         LOGGER.info("trace_saved path=%s episode_id=%s", trace_path, episode_id)
 
     LOGGER.info("response chosen=%s total=%.4f internal=%.4f external=%.4f episode_id=%s", response.text, reward.total, reward.internal.total, reward.external.total, episode_id)

@@ -13,7 +13,8 @@ from src.apps.run_minimal_chat import (
     save_chat_runtime_context,
 )
 from src.core.io.lsd_lexicon import load_lexicon_container
-from src.core.schema import LexiconContainer
+from src.core.logging.trace_logger import JsonlTraceLogger
+from src.core.schema import LexiconContainer, new_session_id
 from src.utils.logging import setup_logging
 from src.utils.settings import apply_arg_defaults, load_settings
 
@@ -245,6 +246,8 @@ def run_chat_mode(args: argparse.Namespace) -> int:
         console_level=logging.DEBUG if args.debug else logging.INFO,
     )
 
+    trace_session_logger = JsonlTraceLogger(args.trace_dir, latest_name='latest_trace.jsonl', rotate_on_start=False) if not args.no_trace else None
+
     lexicon_path = Path(args.lexicon)
     LOGGER.info('lexicon.load.start path=%s', lexicon_path)
 
@@ -254,6 +257,24 @@ def run_chat_mode(args: argparse.Namespace) -> int:
     LOGGER.info('lexicon.load.done entries=%s', len(lexicon.entries))
 
     normalizer = SurfaceNormalizer(lexicon)
+    interactive_mode = not bool(args.text or args.words)
+
+    runtime_context = None
+    if not args.no_history:
+        runtime_context = load_chat_runtime_context(
+            session_id=args.session_id,
+            history_path=args.history_path,
+            history_enabled=True,
+            reset=args.reset_history,
+        )
+
+    active_session_id = runtime_context.session_id if runtime_context is not None else (str(args.session_id or '').strip() or new_session_id())
+    if trace_session_logger is not None:
+        trace_session_logger.append_event(
+            'session_start',
+            payload={'mode': 'chat', 'interactive': interactive_mode, 'history_enabled': not args.no_history},
+            session_id=active_session_id,
+        )
 
     if args.text or args.words:
         pipeline_args = build_pipeline_args(
@@ -266,32 +287,17 @@ def run_chat_mode(args: argparse.Namespace) -> int:
             policy_memory=args.policy_memory,
             no_policy_memory=args.no_policy_memory,
             history_path=args.history_path,
-            session_id=args.session_id,
+            session_id=active_session_id,
             no_history=args.no_history,
             reset_history=args.reset_history,
         )
-        runtime_context = None
-        if not args.no_history:
-            runtime_context = load_chat_runtime_context(
-                session_id=args.session_id,
-                history_path=args.history_path,
-                history_enabled=True,
-                reset=args.reset_history,
-            )
         response_text, _ = run_pipeline(pipeline_args, lexicon, normalizer, runtime_context=runtime_context)
         if runtime_context is not None:
             save_chat_runtime_context(runtime_context)
         print(response_text)
+        if trace_session_logger is not None:
+            trace_session_logger.append_event('session_end', payload={'mode': 'chat', 'reason': 'single_turn_complete'}, session_id=active_session_id)
         return 0
-
-    runtime_context = None
-    if not args.no_history:
-        runtime_context = load_chat_runtime_context(
-            session_id=args.session_id,
-            history_path=args.history_path,
-            history_enabled=True,
-            reset=args.reset_history,
-        )
 
     print('LSLM v3 interactive mode')
     if runtime_context is not None:
@@ -302,6 +308,8 @@ def run_chat_mode(args: argparse.Namespace) -> int:
             raw_text = input('>>> ').strip()
         except KeyboardInterrupt:
             print()
+            if trace_session_logger is not None:
+                trace_session_logger.append_event('session_end', payload={'mode': 'chat', 'reason': 'keyboard_interrupt'}, session_id=active_session_id)
             return 0
 
         if not raw_text:
@@ -310,6 +318,8 @@ def run_chat_mode(args: argparse.Namespace) -> int:
         if raw_text.lower() in ('exit', 'quit'):
             if runtime_context is not None:
                 save_chat_runtime_context(runtime_context)
+            if trace_session_logger is not None:
+                trace_session_logger.append_event('session_end', payload={'mode': 'chat', 'reason': 'user_exit'}, session_id=active_session_id)
             return 0
 
         if raw_text.lower() in ('/reset', ':reset', 'reset-history'):
@@ -319,6 +329,7 @@ def run_chat_mode(args: argparse.Namespace) -> int:
                 history_enabled=not args.no_history,
                 reset=True,
             ) if not args.no_history else None
+            active_session_id = runtime_context.session_id if runtime_context is not None else (str(args.session_id or '').strip() or new_session_id())
             if runtime_context is not None:
                 save_chat_runtime_context(runtime_context)
             print('[history] reset')
@@ -335,7 +346,7 @@ def run_chat_mode(args: argparse.Namespace) -> int:
                 policy_memory=args.policy_memory,
                 no_policy_memory=args.no_policy_memory,
                 history_path=args.history_path,
-                session_id=runtime_context.session_id if runtime_context is not None else args.session_id,
+                session_id=active_session_id,
                 no_history=args.no_history,
                 reset_history=False,
             )

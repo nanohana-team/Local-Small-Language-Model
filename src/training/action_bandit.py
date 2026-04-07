@@ -14,6 +14,11 @@ from src.training.teacher_guidance import TeacherGuidanceResult
 
 LOGGER = logging.getLogger(__name__)
 _PUNCT_RE = re.compile(r'[\s、。？！!?,，．・「」『』（）()\[\]{}]+')
+_LOW_VALUE_CONTEXT_WORDS = {
+    'この', 'その', 'あの', 'それ', 'これ', 'あれ', 'ここ', 'そこ', 'あそこ',
+    '何か', '何も', 'もの', 'こと', '一番', '色々', '〇〇', 'どれ', 'どんな',
+}
+_LOW_VALUE_CONTEXT_ENDINGS = ('は', 'が', 'を', 'に', 'で', 'の', 'も', 'って', 'んだ', 'かな', 'よね', 'っけ')
 
 
 @dataclass(slots=True)
@@ -268,12 +273,18 @@ class ActionBanditStore:
 
     def build_context_key(self, *, intent_plan: IntentPlan, filled_slots: FilledSlots) -> str:
         parts: List[str] = [f'intent={intent_plan.intent}', f'policy={intent_plan.response_policy_hint}']
-        if filled_slots.frame.predicate:
-            parts.append(f'predicate={filled_slots.frame.predicate}')
+        predicate_value = str(filled_slots.frame.predicate or '').strip()
+        normalized_predicate = self._normalize_text(predicate_value) if predicate_value else ''
+        if predicate_value and not self._is_low_value_context_value(predicate_value):
+            parts.append(f'predicate={predicate_value}')
         for slot_name in self.config.context_value_slots:
             slot = filled_slots.values.get(slot_name)
-            if slot and str(slot.value).strip():
-                parts.append(f'{slot_name}={self._normalize_text(slot.value)}')
+            slot_value = str(slot.value).strip() if slot else ''
+            normalized_slot_value = self._normalize_text(slot_value) if slot_value else ''
+            if slot_name == 'predicate' and normalized_slot_value == normalized_predicate:
+                continue
+            if slot_value and not self._is_low_value_context_value(slot_value):
+                parts.append(f'{slot_name}={normalized_slot_value}')
         if filled_slots.missing_required:
             parts.append('missing=' + ','.join(sorted(str(name) for name in filled_slots.missing_required)))
         return '|'.join(parts)
@@ -321,3 +332,17 @@ class ActionBanditStore:
 
     def _normalize_text(self, text: str) -> str:
         return _PUNCT_RE.sub('', str(text or '')).strip().lower()
+
+    def _is_low_value_context_value(self, value: str) -> bool:
+        text = str(value or '').strip()
+        if not text:
+            return True
+        if text in _LOW_VALUE_CONTEXT_WORDS:
+            return True
+        if text.startswith('〇〇'):
+            return True
+        if len(text) <= 2 and all('ぁ' <= ch <= 'ん' or ch == 'ー' for ch in text):
+            return True
+        if len(text) <= 3 and any(text.endswith(ending) for ending in _LOW_VALUE_CONTEXT_ENDINGS):
+            return True
+        return False

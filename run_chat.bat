@@ -19,3 +19,5 @@ for /f %%i in (requirements.txt) do (
 del tmp_requirements.txt
 
 python -m main --mode chat
+
+exit

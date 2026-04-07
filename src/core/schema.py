@@ -475,6 +475,9 @@ class RealizationCandidate:
     slot_coverage: float = 0.0
     semantic_score: float = 0.0
     final_score: float = 0.0
+    score_breakdown: "ScoreBreakdown" = field(default_factory=lambda: ScoreBreakdown())
+    internal_reward_estimate: float = 0.0
+    selection_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -578,6 +581,39 @@ class RewardBreakdown:
 
 
 @dataclass(slots=True)
+class DecisionCandidateTrace:
+    index: int = 0
+    rank: int = 0
+    text: str = ""
+    template_id: str = ""
+    final_score: float = 0.0
+    score_breakdown: ScoreBreakdown = field(default_factory=ScoreBreakdown)
+    internal_reward_estimate: float = 0.0
+    selected: bool = False
+    rejected_reason_codes: List[str] = field(default_factory=list)
+    score_gap_from_best: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class DecisionTrace:
+    selection_source: str = "scorer"
+    selected_index: int = -1
+    selected_text: str = ""
+    selected_template_id: str = ""
+    selected_score: float = 0.0
+    selected_reward_total: float = 0.0
+    selected_reward_internal: float = 0.0
+    selected_reward_external: float = 0.0
+    margin_vs_second: float = 0.0
+    compared_candidates: List[DecisionCandidateTrace] = field(default_factory=list)
+    selected_slot_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    selected_relation_paths: List[List[str]] = field(default_factory=list)
+    selection_reason_codes: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class ResponseResult:
     text: str
     intent: IntentType = "unknown"
@@ -619,6 +655,7 @@ class TraceLog:
     actions: List[EpisodeAction] = field(default_factory=list)
     slot_trace: SlotTrace = field(default_factory=SlotTrace)
     reward: RewardBreakdown = field(default_factory=RewardBreakdown)
+    decision_trace: DecisionTrace = field(default_factory=DecisionTrace)
     state_after: Dict[str, Any] = field(default_factory=dict)
     dialogue_state_after: Optional[DialogueState] = None
 

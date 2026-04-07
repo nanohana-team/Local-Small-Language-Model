@@ -8,29 +8,43 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from src.core.schema import GrammarConstraints, LexiconContainer, LexiconEntry, SurfaceForm, UnknownSpan
+from src.training.contamination_guard import assess_dict_entry
 from src.training.llm_gateway import LLMGateway
 
 LOGGER = logging.getLogger(__name__)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL)
+_FRAGMENT_SURFACE_RE = re.compile(r'^(?:[ぁ-んー]{1,2}|[ぁ-んー]{1,4}(?:んだ|かな|よね|っけ)|〇〇.*)$')
+_COMMON_NON_PROPER_KATAKANA = {'リフレッシュ', 'メニュー', 'ランチ', 'レシピ', 'チケット', 'クリア', 'イタリアン'}
 
 
 @dataclass(slots=True)
 class UnknownWordLearnerConfig:
     enabled: bool = True
+    quarantine_path: str = 'runtime/dict_candidate_quarantine.jsonl'
+    contamination_watch_threshold: float = 0.45
+    contamination_danger_threshold: float = 0.74
+    relearn_trigger_count: int = 2
+    auto_relearn_watch_entries: bool = True
     min_span_length: int = 2
     max_spans_per_turn: int = 2
-    promote_threshold: int = 1
+    promote_threshold: int = 3
     pending_path: str = 'runtime/unknown_word_candidates.jsonl'
     overlay_path: str = 'runtime/lexicon_overlay.json'
     temperature: float = 0.1
     max_output_tokens: int = 220
     preferred_models: List[str] = field(default_factory=list)
     request_timeout_note: str = ''
+    min_overlay_confidence: float = 0.78
+    allow_multi_token_surface_promotion: bool = False
+    reject_function_word_entries: bool = True
+    reject_unknown_pos_entries: bool = True
 
 
 @dataclass(slots=True)
 class UnknownWordLearningResult:
     examined_spans: List[str] = field(default_factory=list)
+    quarantined_records: List[Dict[str, Any]] = field(default_factory=list)
+    relearned_words: List[str] = field(default_factory=list)
     applied_words: List[str] = field(default_factory=list)
     skipped_spans: List[str] = field(default_factory=list)
     pending_records: List[Dict[str, Any]] = field(default_factory=list)
@@ -55,6 +69,26 @@ class UnknownWordLearner:
         overlay = self._load_overlay()
         applied: List[str] = []
         for word, entry in dict(overlay.get('entries', {})).items():
+            risk = assess_dict_entry(
+                word=str(word),
+                entry_payload=entry,
+                surface=str(dict(entry or {}).get('meta', {}).get('source_surface', word) or word),
+                occurrence_count=int(dict(entry or {}).get('meta', {}).get('occurrence_count', self.config.promote_threshold) or self.config.promote_threshold),
+                min_overlay_confidence=float(self.config.min_overlay_confidence),
+                watch_threshold=float(self.config.contamination_watch_threshold),
+                danger_threshold=float(self.config.contamination_danger_threshold),
+            )
+            if risk.status != 'safe':
+                self._append_quarantine_record({
+                    'surface': str(word),
+                    'word': str(word),
+                    'entry': dict(entry or {}),
+                    'risk_assessment': risk.to_dict(),
+                    'source': 'existing_overlay',
+                })
+                continue
+            if not self._entry_allowed_for_overlay(str(word), entry, source='existing_overlay'):
+                continue
             if self._apply_entry_to_lexicon(word, entry):
                 applied.append(word)
         if applied:
@@ -92,6 +126,11 @@ class UnknownWordLearner:
                 result.skipped_spans.append(surface)
                 continue
 
+            if self._should_skip_surface(surface, span):
+                result.skipped_spans.append(surface)
+                LOGGER.info('unknown_word.skip surface=%s reason=surface_filter', surface)
+                continue
+
             occurrence_count = self._count_pending_occurrences(surface) + 1
             entry_payload = self._request_entry_payload(surface=surface, raw_text=raw_text, span=span)
             pending_record = {
@@ -106,13 +145,66 @@ class UnknownWordLearner:
                 'occurrence_count': occurrence_count,
                 'entry': entry_payload,
             }
+            risk = assess_dict_entry(
+                word=str(entry_payload.get('word', surface)).strip() or surface,
+                entry_payload=entry_payload,
+                surface=surface,
+                occurrence_count=occurrence_count,
+                min_overlay_confidence=float(self.config.min_overlay_confidence),
+                watch_threshold=float(self.config.contamination_watch_threshold),
+                danger_threshold=float(self.config.contamination_danger_threshold),
+            )
+            pending_record['risk_assessment'] = risk.to_dict()
             self._append_pending_record(pending_record)
             result.pending_records.append(pending_record)
 
+            candidate_payload = entry_payload
+            candidate_risk = risk
+            if risk.status == 'watch' and bool(self.config.auto_relearn_watch_entries) and occurrence_count >= max(1, int(self.config.relearn_trigger_count)):
+                relearned_payload = self._request_relearned_entry_payload(
+                    surface=surface,
+                    raw_text=raw_text,
+                    span=span,
+                    previous_payload=entry_payload,
+                    risk_reasons=risk.reasons,
+                )
+                candidate_payload = relearned_payload
+                candidate_risk = assess_dict_entry(
+                    word=str(relearned_payload.get('word', surface)).strip() or surface,
+                    entry_payload=relearned_payload,
+                    surface=surface,
+                    occurrence_count=occurrence_count,
+                    min_overlay_confidence=float(self.config.min_overlay_confidence),
+                    watch_threshold=float(self.config.contamination_watch_threshold),
+                    danger_threshold=float(self.config.contamination_danger_threshold),
+                )
+                result.relearned_words.append(str(candidate_payload.get('word', surface)).strip() or surface)
+
+            if candidate_risk.status != 'safe':
+                quarantine_record = dict(pending_record)
+                quarantine_record['entry'] = candidate_payload
+                quarantine_record['risk_assessment'] = candidate_risk.to_dict()
+                quarantine_record['next_action'] = candidate_risk.suggested_action
+                self._append_quarantine_record(quarantine_record)
+                result.quarantined_records.append(quarantine_record)
+                result.skipped_spans.append(surface)
+                LOGGER.info(
+                    'unknown_word.quarantined surface=%s word=%s status=%s risk=%.4f',
+                    surface,
+                    str(candidate_payload.get('word', surface)).strip() or surface,
+                    candidate_risk.status,
+                    candidate_risk.risk_score,
+                )
+                continue
+
             if occurrence_count >= max(1, int(self.config.promote_threshold)):
-                word = str(entry_payload.get('word', surface)).strip() or surface
-                self._save_overlay_entry(word, entry_payload)
-                if self._apply_entry_to_lexicon(word, entry_payload):
+                word = str(candidate_payload.get('word', surface)).strip() or surface
+                if not self._entry_allowed_for_overlay(word, candidate_payload, source='learned_entry'):
+                    result.skipped_spans.append(surface)
+                    LOGGER.info('unknown_word.promote_skipped surface=%s word=%s reason=entry_filter', surface, word)
+                    continue
+                self._save_overlay_entry(word, candidate_payload, risk_assessment=candidate_risk.to_dict(), occurrence_count=occurrence_count)
+                if self._apply_entry_to_lexicon(word, candidate_payload):
                     result.applied_words.append(word)
                     LOGGER.info(
                         'unknown_word.promoted surface=%s word=%s occurrences=%s overlay=%s',
@@ -180,6 +272,64 @@ class UnknownWordLearner:
                 named_entity_type_hint=span.named_entity_type_hint,
                 reason='llm_failed',
             )
+
+    def _request_relearned_entry_payload(
+        self,
+        *,
+        surface: str,
+        raw_text: str,
+        span: UnknownSpan,
+        previous_payload: Mapping[str, Any],
+        risk_reasons: Sequence[str],
+    ) -> Dict[str, Any]:
+        system_prompt = (
+            'You are repairing a risky Japanese lexicon entry candidate for LSLM v3. '
+            'Return JSON only. Be stricter than before. Prefer a conservative non-promotion-safe entry when uncertain. '
+            'Avoid fragment surfaces, function words, and ambiguous proper nouns.'
+        )
+        user_prompt = (
+            'Repair the lexicon entry below using the original context.\n'
+            'Requirements:\n'
+            '- JSON object only\n'
+            '- keep the original surface unless there is a very clear stable lemma\n'
+            '- if the token looks like a fragment, particle-attached piece, or colloquial ending, keep category="surface" and grammar.pos="unknown"\n'
+            '- only mark proper_noun=true when evidence is strong and named_entity_type is stable\n\n'
+            f'surface: {surface}\n'
+            f'context: {raw_text}\n'
+            f'previous_entry: {json.dumps(dict(previous_payload), ensure_ascii=False)}\n'
+            f'risk_reasons: {", ".join(str(item) for item in risk_reasons)}\n'
+            f'pos_hint: {span.pos_hint}\n'
+            f'proper_noun_candidate: {span.proper_noun_candidate}\n'
+            f'named_entity_type_hint: {span.named_entity_type_hint or ""}\n'
+        )
+        try:
+            response = self.llm_gateway.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                purpose='unknown_word_entry_relearn',
+                preferred_models=self.config.preferred_models or None,
+                temperature=max(0.0, min(0.2, float(self.config.temperature))),
+                max_output_tokens=max(1, int(self.config.max_output_tokens)),
+            )
+            parsed = self._parse_json_object(response.text)
+            normalized = self._normalize_entry_payload(surface=surface, payload=parsed, span=span)
+            normalized.setdefault('meta', {})
+            normalized['meta'].update({
+                'generated_by': 'llm_unknown_word_relearn',
+                'llm_provider': response.provider,
+                'llm_model': response.model,
+                'relearned_from_risk': list(risk_reasons),
+            })
+            return normalized
+        except Exception as exc:
+            LOGGER.warning('unknown_word.relearn_failed surface=%s error=%s', surface, exc)
+            fallback = self._normalize_entry_payload(surface=surface, payload=previous_payload, span=span)
+            fallback.setdefault('meta', {})
+            fallback['meta'].setdefault('generated_by', 'llm_unknown_word_relearn_fallback')
+            fallback['meta']['relearn_failed'] = True
+            fallback['meta']['relearn_failed_error'] = str(exc)
+            fallback['meta']['relearned_from_risk'] = list(risk_reasons)
+            return fallback
 
     def _fallback_entry_payload(
         self,
@@ -251,8 +401,11 @@ class UnknownWordLearner:
             or grammar.get('proper_noun', False)
             or category == 'proper_noun'
             or str(grammar.get('sub_pos', '')).strip() == 'proper_noun'
-            or payload_entity_type
-            or span.proper_noun_candidate
+        )
+        proper_noun = proper_noun and self._has_proper_noun_evidence(
+            surface=surface,
+            span=span,
+            named_entity_type=payload_entity_type,
         )
 
         if proper_noun:
@@ -316,6 +469,56 @@ class UnknownWordLearner:
         self._update_indexes(entry)
         return True
 
+    def _should_skip_surface(self, surface: str, span: UnknownSpan) -> bool:
+        text = str(surface or '').strip()
+        if not text:
+            return True
+        if _FRAGMENT_SURFACE_RE.match(text):
+            return True
+        if len(text) <= 3 and any(text.endswith(suffix) for suffix in ('は', 'が', 'を', 'に', 'で', 'の', 'も')):
+            return True
+        if len(text) <= 4 and all('ぁ' <= ch <= 'ん' or ch == 'ー' for ch in text):
+            return True
+        if text in {'ねえ', 'ねぇ', 'かな', 'んだ', 'っけ', 'よね', 'いえば'}:
+            return True
+        if not span.proper_noun_candidate and text in _COMMON_NON_PROPER_KATAKANA:
+            return False
+        return False
+
+    def _has_proper_noun_evidence(self, *, surface: str, span: UnknownSpan, named_entity_type: str) -> bool:
+        text = str(surface or '').strip()
+        if span.proper_noun_candidate or str(span.named_entity_type_hint or '').strip():
+            return True
+        if any(ch.isascii() and (ch.isupper() or ch.isdigit()) for ch in text):
+            return True
+        if '・' in text or '·' in text:
+            return True
+        if text.startswith(('株式会社', '有限会社', '合同会社', '学校法人')):
+            return True
+        if named_entity_type and text not in _COMMON_NON_PROPER_KATAKANA:
+            return True
+        return False
+
+    def _entry_allowed_for_overlay(self, word: str, entry_payload: Mapping[str, Any], *, source: str) -> bool:
+        text = str(word or '').strip()
+        if not text or self._should_skip_surface(text, UnknownSpan(surface=text)):
+            return False
+        grammar = dict(entry_payload.get('grammar', {}) or {})
+        meta = dict(entry_payload.get('meta', {}) or {})
+        confidence = float(meta.get('confidence', 1.0) or 1.0)
+        if confidence < float(self.config.min_overlay_confidence):
+            return False
+        if self.config.reject_unknown_pos_entries and str(grammar.get('pos', 'unknown')).strip() == 'unknown':
+            return False
+        if self.config.reject_function_word_entries and bool(grammar.get('function_word', False)):
+            return False
+        if not bool(grammar.get('proper_noun', False)):
+            surface_forms = list(entry_payload.get('surface_forms', []) or [])
+            has_multi_token = any(len(list(form.get('tokens', []) or [])) > 1 for form in surface_forms if isinstance(form, Mapping))
+            if has_multi_token and not bool(self.config.allow_multi_token_surface_promotion):
+                return False
+        return True
+
     def _update_indexes(self, entry: LexiconEntry) -> None:
         pos = str(entry.grammar.pos or 'unknown')
         bucket = self.lexicon.indexes.by_pos.setdefault(pos, [])
@@ -361,6 +564,13 @@ class UnknownWordLearner:
             LOGGER.warning('unknown_word.pending_count_failed path=%s error=%s', path, exc)
         return count
 
+    def _append_quarantine_record(self, record: Mapping[str, Any]) -> None:
+        path = Path(self.config.quarantine_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps(dict(record), ensure_ascii=False, separators=(',', ':')))
+            handle.write('\n')
+
     def _load_overlay(self) -> Dict[str, Any]:
         if self._overlay_cache is not None:
             return self._overlay_cache
@@ -380,10 +590,23 @@ class UnknownWordLearner:
         self._overlay_cache = payload
         return payload
 
-    def _save_overlay_entry(self, word: str, entry_payload: Mapping[str, Any]) -> None:
+    def _save_overlay_entry(
+        self,
+        word: str,
+        entry_payload: Mapping[str, Any],
+        *,
+        risk_assessment: Mapping[str, Any] | None = None,
+        occurrence_count: int | None = None,
+    ) -> None:
         overlay = self._load_overlay()
         overlay_entries = dict(overlay.get('entries', {}))
-        overlay_entries[str(word)] = dict(entry_payload)
+        payload = dict(entry_payload)
+        payload.setdefault('meta', {})
+        if risk_assessment is not None:
+            payload['meta']['contamination_guard'] = dict(risk_assessment)
+        if occurrence_count is not None:
+            payload['meta']['occurrence_count'] = int(max(1, occurrence_count))
+        overlay_entries[str(word)] = payload
         overlay['entries'] = overlay_entries
         path = Path(self.config.overlay_path)
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -63,9 +63,18 @@ pipeline:
     enabled: true
     min_span_length: 2
     max_spans_per_turn: 2
-    promote_threshold: 1
+    promote_threshold: 3
+    min_overlay_confidence: 0.78
+    allow_multi_token_surface_promotion: false
+    reject_function_word_entries: true
+    reject_unknown_pos_entries: true
     pending_path: runtime/unknown_word_candidates.jsonl
     overlay_path: runtime/lexicon_overlay.json
+    quarantine_path: runtime/dict_candidate_quarantine.jsonl
+    contamination_watch_threshold: 0.45
+    contamination_danger_threshold: 0.74
+    relearn_trigger_count: 2
+    auto_relearn_watch_entries: true
     temperature: 0.1
     max_output_tokens: 220
     preferred_models: []

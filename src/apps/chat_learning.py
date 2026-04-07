@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 from src.apps.run_minimal_chat import SurfaceNormalizer
 from src.core.io.lsd_lexicon import load_lexicon_container
+from src.core.logging.trace_logger import JsonlTraceLogger
 from src.core.schema import DialogueState, LexiconContainer, new_session_id
 from src.training.action_bandit import ActionBanditConfig, ActionBanditStore
 from src.training.external_evaluator import HeuristicExternalEvaluatorConfig, LLMExternalEvaluatorConfig, build_external_evaluator
@@ -147,6 +148,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     session_id = new_session_id('learnsess')
     dialogue_state = DialogueState()
+    trace_session_logger = JsonlTraceLogger(args.trace_dir, latest_name='latest_trace.jsonl', rotate_on_start=False) if not args.no_trace else None
+    if trace_session_logger is not None:
+        trace_session_logger.append_event('session_start', payload={'mode': 'learn', 'interactive': not bool(args.text or args.words)}, session_id=session_id)
 
     def run_once(raw_text: str, explicit_words: Optional[Sequence[str]]) -> None:
         nonlocal dialogue_state
@@ -178,6 +182,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raw_text = args.text if args.text else ' '.join(args.words or [])
         for _ in range(max(1, int(args.episodes))):
             run_once(raw_text=raw_text, explicit_words=args.words)
+        if trace_session_logger is not None:
+            trace_session_logger.append_event('session_end', payload={'mode': 'learn', 'reason': 'batch_complete'}, session_id=session_id)
         return 0
 
     print('LSLM v3 learning mode')
@@ -186,11 +192,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raw_text = input('>>> ').strip()
         except KeyboardInterrupt:
             print()
+            if trace_session_logger is not None:
+                trace_session_logger.append_event('session_end', payload={'mode': 'learn', 'reason': 'keyboard_interrupt'}, session_id=session_id)
             return 0
 
         if not raw_text:
             continue
         if raw_text.lower() in {'exit', 'quit'}:
+            if trace_session_logger is not None:
+                trace_session_logger.append_event('session_end', payload={'mode': 'learn', 'reason': 'user_exit'}, session_id=session_id)
             return 0
 
         try:
