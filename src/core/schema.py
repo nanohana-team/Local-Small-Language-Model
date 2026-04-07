@@ -15,6 +15,12 @@ IntentType = Literal[
     "question",
     "confirm",
     "explain",
+    "ask_fact",
+    "ask_availability",
+    "ask_recommendation",
+    "ask_progress",
+    "smalltalk_expand",
+    "share_experience",
     "unknown",
 ]
 

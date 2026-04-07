@@ -26,6 +26,8 @@ class SemanticRecallConfig:
     relation_weight_scale: float = 0.85
     axis_weight_scale: float = 0.75
     input_weight: float = 1.25
+    function_seed_weight: float = 0.22
+    content_seed_weight: float = 1.00
     prefer_content_words_in_axis: bool = True
     axis_probe_limit: int = 512
 
@@ -129,7 +131,8 @@ class SemanticRecallEngine:
         lexicon: LexiconContainer,
     ) -> List[str]:
         seen: Set[str] = set()
-        ordered: List[str] = []
+        ordered_content: List[str] = []
+        ordered_function: List[str] = []
         raw_candidates = list(input_state.normalized_tokens) + list(input_state.tokens)
 
         LOGGER.debug(
@@ -167,8 +170,15 @@ class SemanticRecallEngine:
                 entry.grammar.function_word,
                 entry.hierarchy,
             )
-            ordered.append(token)
+            if entry.grammar.content_word:
+                ordered_content.append(token)
+            else:
+                ordered_function.append(token)
             seen.add(token)
+
+        ordered = ordered_content if ordered_content else ordered_function
+        if ordered_content and len(ordered_content) < 3:
+            ordered = ordered_content + ordered_function[: max(0, 3 - len(ordered_content))]
 
         LOGGER.debug("semantic_recall.collect_seeds.result=%s", ordered)
         return ordered
@@ -181,13 +191,17 @@ class SemanticRecallEngine:
     ) -> None:
         LOGGER.debug("semantic_recall.add_input_candidates.begin seeds=%s", list(seeds))
 
-        for seed in seeds:
+        content_preferred = [seed for seed in seeds if (lexicon.entries.get(seed) and lexicon.entries.get(seed).grammar.content_word)]
+        seed_sequence = content_preferred or list(seeds)
+
+        for seed in seed_sequence:
             entry = lexicon.entries.get(seed)
             grammar_ok = self._is_grammar_ok(entry)
 
+            seed_weight = self.config.content_seed_weight if (entry and entry.grammar.content_word) else self.config.function_seed_weight
             candidate = RecallCandidate(
                 word=seed,
-                score=self.config.input_weight,
+                score=self.config.input_weight * seed_weight,
                 source="input",
                 relation_path=[seed],
                 axis_distance=0.0,
@@ -482,7 +496,10 @@ class SemanticRecallEngine:
             dialogue_state.context_vector.to_dict(),
         )
 
-        for seed in seeds:
+        content_preferred = [seed for seed in seeds if (lexicon.entries.get(seed) and lexicon.entries.get(seed).grammar.content_word)]
+        seed_sequence = content_preferred or list(seeds)
+
+        for seed in seed_sequence:
             entry = lexicon.entries.get(seed)
             if entry is None:
                 LOGGER.debug(

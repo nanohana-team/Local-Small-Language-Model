@@ -1,105 +1,32 @@
 learning:
-  episodes: 1
   tasks: 1
-  target_mode: llm
-  external_mode: llm
-  input_mode: llm
-  teacher_target_weight: 0.35
-  report_every: 1
-  seed_topic: ""
-  seed_text: "こんにちは。今日はどんな一日になりそうですか。"
-  runtime:
-    policy_memory_limit: 4
-  action_bandit:
-    enabled: true
-    temperature: 0.85
-    explore_top_k: 3
-    scorer_weight: 0.58
-    teacher_weight: 0.18
-    learned_weight: 0.18
-    uncertainty_weight: 0.06
-    reward_ema_alpha: 0.30
-    default_value: 0.50
-    min_probability: 0.02
-    context_value_slots:
-      - topic
-      - predicate
-      - target
-      - actor
-      - state
+  parallel:
+    max_workers: 50
   reward_aggregator:
-    alpha: 0.8
-    beta: 0.2
+    alpha: 0.7
+    beta: 0.3
     fallback_strategy: neutral
     neutral_external_score: 0.5
     use_power_transform: false
     external_power: 1.5
-    mismatch_internal_threshold: 0.8
-    mismatch_external_threshold: 0.2
-    mismatch_penalty: 0.18
+    mismatch_internal_threshold: 0.76
+    mismatch_external_threshold: 0.24
+    mismatch_penalty: 0.24
 
 policy_memory:
-  min_match_score: 0.34
-  max_suggestions: 4
-  max_records_per_key: 16
+  min_match_score: 0.55
+  max_suggestions: 3
+  max_records_per_key: 12
   teacher_reward_scale: 1.0
   response_reward_scale: 0.6
-  teacher_source_bonus: 0.08
-  response_source_bonus: 0.03
-  selected_response_hard_reject_external: 0.2
-  selected_response_min_reward_total: 0.35
-  selected_response_low_external_threshold: 0.45
-  selected_response_low_external_scale: 0.2
-
-teacher_guidance:
-  target_weight: 0.35
-  min_override_delta: 0.015
-  min_alignment_gain: 0.05
-  max_blended_regression: 0.01
-  min_override_alignment: 0.5
-  max_slot_score_regression: 0.2
-
-llm:
-  target_generation:
-    temperature: 0.4
-    max_output_tokens: 160
-  external_evaluation:
-    temperature: 0.1
-    max_output_tokens: 240
-  input_generation:
-    temperature: 0.9
-    max_output_tokens: 120
-    history_inputs_limit: 8
-    history_targets_limit: 4
-  heuristic_external:
-    non_empty_weight: 0.15
-    length_weight: 0.15
-    slot_weight: 0.25
-    intent_weight: 0.20
-    target_weight: 0.25
-    empty_slot_score: 0.5
-    empty_target_score: 0.5
-    empty_token_overlap_score: 0.5
-    question_match_score: 1.0
-    question_mismatch_score: 0.4
-    empathy_match_score: 1.0
-    empathy_mismatch_score: 0.5
-    default_intent_score: 0.9
-    punctuated_respond_penalty_score: 0.5
-    unknown_intent_score: 0.7
-    exact_echo_penalty: 0.25
-    partial_echo_penalty: 0.10
-    empty_length_score: 0.0
-    short_length_divisor: 4.0
-    short_length_floor: 4
-    ideal_length_min: 4
-    ideal_length_max: 64
-    long_length_min: 65
-    long_length_max: 128
-    long_length_decay_span: 96.0
-    long_length_base: 64
-    too_long_score: 0.2
-    excellent_threshold: 0.85
-    good_threshold: 0.70
-    acceptable_threshold: 0.50
-    weak_threshold: 0.30
+  teacher_source_bonus: 0.06
+  response_source_bonus: 0.02
+  selected_response_hard_reject_external: 0.24
+  selected_response_min_reward_total: 0.42
+  selected_response_low_external_threshold: 0.50
+  selected_response_low_external_scale: 0.10
+  min_suggest_weight: 0.12
+  min_suggest_external: 0.28
+  min_exact_slot_hits: 1
+  min_anchor_slot_hits: 1
+  require_anchor_slot_match: true

@@ -7,8 +7,10 @@ from typing import Optional, Sequence
 
 from src.apps.run_minimal_chat import (
     SurfaceNormalizer,
+    load_chat_runtime_context,
     parse_args as parse_minimal_args,
     run_pipeline,
+    save_chat_runtime_context,
 )
 from src.core.io.lsd_lexicon import load_lexicon_container
 from src.core.schema import LexiconContainer
@@ -25,8 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--lexicon', default=None)
     parser.add_argument('--trace-dir', default=None)
     parser.add_argument('--policy-memory', default=None)
+    parser.add_argument('--history-path', default=None)
+    parser.add_argument('--session-id', default='')
     parser.add_argument('--action-bandit', default=None)
     parser.add_argument('--no-policy-memory', action='store_true')
+    parser.add_argument('--no-history', action='store_true')
+    parser.add_argument('--reset-history', action='store_true')
     parser.add_argument('--no-action-bandit', action='store_true')
     parser.add_argument('--no-trace', action='store_true')
     parser.add_argument('--debug', action='store_true')
@@ -61,6 +67,7 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
             ('lexicon', ('paths', 'lexicon'), 'libs/dict.lsdx'),
             ('trace_dir', ('paths', 'trace_dir'), 'runtime/traces'),
             ('policy_memory', ('paths', 'policy_memory'), 'runtime/policy_memory.json'),
+            ('history_path', ('paths', 'chat_history'), 'runtime/chat_history/latest_session.json'),
             ('action_bandit', ('paths', 'action_bandit'), 'runtime/action_bandit.json'),
             ('dataset_dir', ('paths', 'dataset_dir'), 'runtime/datasets'),
             ('episodes', ('learning', 'episodes'), 1),
@@ -90,6 +97,10 @@ def build_pipeline_args(
     words: Optional[Sequence[str]],
     policy_memory: str,
     no_policy_memory: bool,
+    history_path: str,
+    session_id: str,
+    no_history: bool,
+    reset_history: bool,
 ):
     argv: list[str] = [
         '--lexicon',
@@ -106,6 +117,15 @@ def build_pipeline_args(
     else:
         argv.extend(['--policy-memory', policy_memory])
 
+    if no_history:
+        argv.append('--no-history')
+    else:
+        argv.extend(['--history-path', history_path])
+    if session_id:
+        argv.extend(['--session-id', session_id])
+    if reset_history:
+        argv.append('--reset-history')
+
     if debug:
         argv.append('--console-debug')
 
@@ -116,6 +136,7 @@ def build_pipeline_args(
         argv.extend(['--text', text])
 
     return parse_minimal_args(argv)
+
 
 
 def build_learning_args(args: argparse.Namespace) -> list[str]:
@@ -154,6 +175,7 @@ def build_learning_args(args: argparse.Namespace) -> list[str]:
     return argv
 
 
+
 def build_auto_learning_args(args: argparse.Namespace) -> list[str]:
     argv: list[str] = [
         '--lexicon', args.lexicon,
@@ -189,6 +211,7 @@ def build_auto_learning_args(args: argparse.Namespace) -> list[str]:
     return argv
 
 
+
 def dispatch_auto_learning_mode(args: argparse.Namespace) -> int:
     from src.apps.auto_loop_learning import main as auto_loop_learning_main
 
@@ -196,10 +219,16 @@ def dispatch_auto_learning_mode(args: argparse.Namespace) -> int:
     return int(auto_loop_learning_main(learning_argv))
 
 
+
 def dispatch_parallel_learning_mode(args: argparse.Namespace) -> int:
+    setup_logging(
+        app_name='lslm_parallel_learning',
+        console_level=logging.DEBUG if args.debug else logging.INFO,
+    )
     from src.apps.parallel_learning import run_parallel_learning
 
     return int(run_parallel_learning(args))
+
 
 
 def dispatch_learning_mode(args: argparse.Namespace) -> int:
@@ -207,6 +236,7 @@ def dispatch_learning_mode(args: argparse.Namespace) -> int:
 
     learning_argv = build_learning_args(args)
     return int(chat_learning_main(learning_argv))
+
 
 
 def run_chat_mode(args: argparse.Namespace) -> int:
@@ -235,12 +265,37 @@ def run_chat_mode(args: argparse.Namespace) -> int:
             words=args.words,
             policy_memory=args.policy_memory,
             no_policy_memory=args.no_policy_memory,
+            history_path=args.history_path,
+            session_id=args.session_id,
+            no_history=args.no_history,
+            reset_history=args.reset_history,
         )
-        response_text, _ = run_pipeline(pipeline_args, lexicon, normalizer)
+        runtime_context = None
+        if not args.no_history:
+            runtime_context = load_chat_runtime_context(
+                session_id=args.session_id,
+                history_path=args.history_path,
+                history_enabled=True,
+                reset=args.reset_history,
+            )
+        response_text, _ = run_pipeline(pipeline_args, lexicon, normalizer, runtime_context=runtime_context)
+        if runtime_context is not None:
+            save_chat_runtime_context(runtime_context)
         print(response_text)
         return 0
 
+    runtime_context = None
+    if not args.no_history:
+        runtime_context = load_chat_runtime_context(
+            session_id=args.session_id,
+            history_path=args.history_path,
+            history_enabled=True,
+            reset=args.reset_history,
+        )
+
     print('LSLM v3 interactive mode')
+    if runtime_context is not None:
+        print(f'[session] {runtime_context.session_id} history_turns={len(runtime_context.history)}')
 
     while True:
         try:
@@ -253,7 +308,21 @@ def run_chat_mode(args: argparse.Namespace) -> int:
             continue
 
         if raw_text.lower() in ('exit', 'quit'):
+            if runtime_context is not None:
+                save_chat_runtime_context(runtime_context)
             return 0
+
+        if raw_text.lower() in ('/reset', ':reset', 'reset-history'):
+            runtime_context = load_chat_runtime_context(
+                session_id=args.session_id,
+                history_path=args.history_path,
+                history_enabled=not args.no_history,
+                reset=True,
+            ) if not args.no_history else None
+            if runtime_context is not None:
+                save_chat_runtime_context(runtime_context)
+            print('[history] reset')
+            continue
 
         try:
             pipeline_args = build_pipeline_args(
@@ -265,19 +334,27 @@ def run_chat_mode(args: argparse.Namespace) -> int:
                 words=None,
                 policy_memory=args.policy_memory,
                 no_policy_memory=args.no_policy_memory,
+                history_path=args.history_path,
+                session_id=runtime_context.session_id if runtime_context is not None else args.session_id,
+                no_history=args.no_history,
+                reset_history=False,
             )
 
             response_text, _ = run_pipeline(
                 pipeline_args,
                 lexicon,
                 normalizer,
+                runtime_context=runtime_context,
             )
+            if runtime_context is not None:
+                save_chat_runtime_context(runtime_context)
 
             print(response_text)
 
         except Exception:
             LOGGER.exception('interactive_turn_failed')
             print('[ERROR] 応答生成に失敗しました')
+
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

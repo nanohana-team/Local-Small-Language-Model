@@ -107,6 +107,14 @@ class SlotFiller:
         "copula",
     }
 
+    BAD_TOPIC_WORDS: Set[str] = {
+        "どう", "どこ", "いつ", "なに", "何", "それ", "これ", "あれ", "とも", "か", "です", "？", "。", "、"
+    }
+
+    BAD_PREDICATE_WORDS: Set[str] = {
+        "どう", "どこ", "いつ", "なに", "何", "それ", "これ", "あれ", "今日", "今日は", "明日", "昨日"
+    }
+
     def __init__(self, config: Optional[SlotFillerConfig] = None) -> None:
         self.config = config or SlotFillerConfig()
 
@@ -329,6 +337,9 @@ class SlotFiller:
                 if entry is None:
                     continue
                 if entry.grammar.pos == preferred_pos:
+                    if token in self.BAD_PREDICATE_WORDS:
+                        LOGGER.debug("slot_filler.select_predicate.skip token=%s reason=predicate_blacklist", token)
+                        continue
                     if preferred_pos == "copula":
                         LOGGER.debug(
                             "slot_filler.select_predicate.skip token=%s reason=bare_copula_not_selected",
@@ -356,6 +367,9 @@ class SlotFiller:
             if entry is None:
                 continue
             if entry.grammar.pos in {"verb", "verb_stem", "adjective_i", "adjective_na"}:
+                if candidate.word in self.BAD_PREDICATE_WORDS:
+                    LOGGER.debug("slot_filler.select_predicate.skip_recall word=%s reason=predicate_blacklist", candidate.word)
+                    continue
                 LOGGER.debug(
                     "slot_filler.select_predicate.hit mode=recall_candidate predicate=%s pos=%s",
                     candidate.word,
@@ -976,6 +990,9 @@ class SlotFiller:
             if entry is None:
                 continue
             if self._is_nominal(entry):
+                if token in self.BAD_TOPIC_WORDS or token in self.TIME_WORDS:
+                    LOGGER.debug("slot_filler.find_best_nominal_topic.skip token=%s reason=bad_topic_word", token)
+                    continue
                 LOGGER.debug(
                     "slot_filler.find_best_nominal_topic.hit token=%s",
                     token,
@@ -1015,6 +1032,9 @@ class SlotFiller:
             if entry is None:
                 continue
             if self._is_nominal(entry):
+                if candidate.word in self.BAD_TOPIC_WORDS or candidate.word in self.TIME_WORDS:
+                    LOGGER.debug("slot_filler.find_topic_from_recall.skip word=%s reason=bad_topic_word", candidate.word)
+                    continue
                 LOGGER.debug(
                     "slot_filler.find_topic_from_recall.hit word=%s",
                     candidate.word,

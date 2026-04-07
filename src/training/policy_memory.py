@@ -28,6 +28,13 @@ _SLOT_PRIORITY: Tuple[str, ...] = (
 )
 
 _PUNCT_RE = re.compile(r'[\s、。？！!?,，．・「」『』（）()\[\]{}]+')
+_GENERIC_LOW_VALUE_TEXTS: Tuple[str, ...] = (
+    '確認できる範囲ではそのように見えます。',
+    '何かについては面白いことが考えられます。',
+    '予定については多いことが考えられます。',
+    'それについては考えられます。',
+)
+_ANCHOR_SLOT_KEYS: Tuple[str, ...] = ('topic', 'predicate', 'target', 'state')
 
 
 @dataclass(slots=True)
@@ -58,17 +65,22 @@ class PolicyMemoryMatch:
 
 @dataclass(slots=True)
 class PolicyMemoryConfig:
-    min_match_score: float = 0.34
-    max_suggestions: int = 4
-    max_records_per_key: int = 16
+    min_match_score: float = 0.55
+    max_suggestions: int = 3
+    max_records_per_key: int = 12
     teacher_reward_scale: float = 1.0
     response_reward_scale: float = 0.6
-    teacher_source_bonus: float = 0.08
-    response_source_bonus: float = 0.03
-    selected_response_hard_reject_external: float = 0.20
-    selected_response_min_reward_total: float = 0.35
-    selected_response_low_external_threshold: float = 0.45
-    selected_response_low_external_scale: float = 0.20
+    teacher_source_bonus: float = 0.06
+    response_source_bonus: float = 0.02
+    selected_response_hard_reject_external: float = 0.24
+    selected_response_min_reward_total: float = 0.42
+    selected_response_low_external_threshold: float = 0.50
+    selected_response_low_external_scale: float = 0.10
+    min_suggest_weight: float = 0.12
+    min_suggest_external: float = 0.28
+    min_exact_slot_hits: int = 1
+    min_anchor_slot_hits: int = 1
+    require_anchor_slot_match: bool = True
 
 
 class PolicyMemoryStore:
@@ -104,22 +116,25 @@ class PolicyMemoryStore:
             text = str(item.get('text', '') or '').strip()
             if not text:
                 continue
-            records.append(
-                PolicyMemoryRecord(
-                    intent=str(item.get('intent', 'unknown') or 'unknown'),
-                    slots={str(k): str(v) for k, v in dict(item.get('slots', {}) or {}).items() if str(v).strip()},
-                    text=text,
-                    source=str(item.get('source', 'teacher_target') or 'teacher_target'),
-                    template_id=str(item.get('template_id', '') or ''),
-                    count=max(1, int(item.get('count', 1) or 1)),
-                    weight=max(0.0, min(1.0, float(item.get('weight', 0.0) or 0.0))),
-                    last_reward_total=max(0.0, min(1.0, float(item.get('last_reward_total', 0.0) or 0.0))),
-                    last_internal=max(0.0, min(1.0, float(item.get('last_internal', 0.0) or 0.0))),
-                    last_external=max(0.0, min(1.0, float(item.get('last_external', 0.0) or 0.0))),
-                    created_at=str(item.get('created_at', '') or ''),
-                    updated_at=str(item.get('updated_at', '') or ''),
-                )
+            record = PolicyMemoryRecord(
+                intent=str(item.get('intent', 'unknown') or 'unknown'),
+                slots={str(k): str(v) for k, v in dict(item.get('slots', {}) or {}).items() if str(v).strip()},
+                text=text,
+                source=str(item.get('source', 'teacher_target') or 'teacher_target'),
+                template_id=str(item.get('template_id', '') or ''),
+                count=max(1, int(item.get('count', 1) or 1)),
+                weight=max(0.0, min(1.0, float(item.get('weight', 0.0) or 0.0))),
+                last_reward_total=max(0.0, min(1.0, float(item.get('last_reward_total', 0.0) or 0.0))),
+                last_internal=max(0.0, min(1.0, float(item.get('last_internal', 0.0) or 0.0))),
+                last_external=max(0.0, min(1.0, float(item.get('last_external', 0.0) or 0.0))),
+                created_at=str(item.get('created_at', '') or ''),
+                updated_at=str(item.get('updated_at', '') or ''),
             )
+            if self._is_generic_low_value_text(record.text):
+                continue
+            if record.weight < float(self.config.min_suggest_weight) and record.last_external < float(self.config.min_suggest_external):
+                continue
+            records.append(record)
         self.records = records
 
     def save(self) -> Path:
@@ -220,6 +235,8 @@ class PolicyMemoryStore:
             return [], []
 
         current_slots = self._filled_slots_to_dict(filled_slots)
+        if not current_slots:
+            return [], []
         existing_normalized = {self._normalize_text(text) for text in (existing_texts or []) if self._normalize_text(text)}
         matches = self._rank_matches(
             intent=intent_plan.intent,
@@ -274,26 +291,39 @@ class PolicyMemoryStore:
 
     def _rank_matches(self, *, intent: str, slots: Mapping[str, str]) -> List[PolicyMemoryMatch]:
         matches: List[PolicyMemoryMatch] = []
+        if not slots:
+            return matches
         for record in self.records:
             if record.intent != intent:
                 continue
+            if record.weight < float(self.config.min_suggest_weight):
+                continue
+            if record.last_external < float(self.config.min_suggest_external):
+                continue
+            if self._is_generic_low_value_text(record.text):
+                continue
             slot_total = len(record.slots)
             slot_hits = 0
+            anchor_hits = 0
             for key, value in record.slots.items():
                 if slots.get(key, '') == value:
                     slot_hits += 1
+                    if key in _ANCHOR_SLOT_KEYS:
+                        anchor_hits += 1
 
             text_slot_hits = sum(1 for value in slots.values() if value and value in record.text)
             exact_intent = record.intent == intent
             structural_score = (slot_hits / float(slot_total)) if slot_total > 0 else 0.0
-            text_bonus = min(0.24, 0.06 * text_slot_hits)
-            confidence_bonus = min(0.20, 0.20 * record.weight)
-            source_bonus = (
-                self.config.teacher_source_bonus
-                if record.source == 'teacher_target'
-                else self.config.response_source_bonus
-            )
-            match_score = structural_score + text_bonus + confidence_bonus + source_bonus
+            anchor_bonus = min(0.30, 0.15 * anchor_hits)
+            text_bonus = min(0.18, 0.04 * text_slot_hits)
+            confidence_bonus = min(0.18, 0.16 * record.weight)
+            source_bonus = self.config.teacher_source_bonus if record.source == 'teacher_target' else self.config.response_source_bonus
+            match_score = structural_score + anchor_bonus + text_bonus + confidence_bonus + source_bonus
+
+            if slot_hits < int(self.config.min_exact_slot_hits):
+                continue
+            if self.config.require_anchor_slot_match and anchor_hits < int(self.config.min_anchor_slot_hits):
+                continue
             if slot_total == 0 and text_slot_hits == 0:
                 continue
             if match_score < self.config.min_match_score:
@@ -312,6 +342,7 @@ class PolicyMemoryStore:
         matches.sort(
             key=lambda item: (
                 item.match_score,
+                item.record.last_external,
                 item.record.weight,
                 item.record.last_reward_total,
                 item.record.count,
@@ -339,6 +370,10 @@ class PolicyMemoryStore:
         elif match.record.source == 'selected_response':
             base += 0.02
         return max(0.0, min(1.0, base))
+
+    def _is_generic_low_value_text(self, text: str) -> bool:
+        normalized = self._normalize_text(text)
+        return any(normalized == self._normalize_text(item) for item in _GENERIC_LOW_VALUE_TEXTS)
 
     def _find_record(self, *, intent: str, slots: Mapping[str, str], text: str, source: str) -> PolicyMemoryRecord | None:
         for record in self.records:

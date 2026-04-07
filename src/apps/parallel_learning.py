@@ -4,52 +4,76 @@ import json
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Sequence
+from typing import Any, Iterable, List, Sequence
 from zoneinfo import ZoneInfo
 
 from src.training.action_bandit import ActionBanditStore
 from src.training.policy_memory import PolicyMemoryStore
+from src.utils.settings import get_setting, load_settings
 
 LOGGER = logging.getLogger(__name__)
 JST = ZoneInfo('Asia/Tokyo')
 
 
 @dataclass(slots=True)
-class ParallelWorkerSpec:
+class ParallelSchedulerConfig:
+    requested_tasks: int
+    logical_jobs: int
+    max_workers: int
+    episodes_total: int
+    use_queue: bool
+    scheduler_mode: str = 'bounded-process-pool'
+
+
+@dataclass(slots=True)
+class ParallelJobSpec:
     mode: str
-    worker_index: int
+    job_index: int
     episodes: int
     argv: List[str]
     policy_memory_path: str
     action_bandit_path: str
     unknown_pending_path: str
     unknown_overlay_path: str
+    runtime_root: str
 
 
 @dataclass(slots=True)
-class ParallelWorkerResult:
-    worker_index: int
+class ParallelJobResult:
+    job_index: int
     exit_code: int
     episodes: int
     policy_memory_path: str
     action_bandit_path: str
     unknown_pending_path: str
     unknown_overlay_path: str
+    runtime_root: str
+
 
 
 def _now_stamp() -> str:
     return datetime.now(JST).strftime('%Y%m%d%H%M%S')
 
 
-def _split_episodes(total: int, tasks: int) -> List[int]:
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+
+def _split_episodes(total: int, jobs: int) -> List[int]:
     total = max(1, int(total))
-    tasks = max(1, min(int(tasks), total))
-    base = total // tasks
-    remainder = total % tasks
-    return [base + (1 if index < remainder else 0) for index in range(tasks)]
+    jobs = max(1, min(int(jobs), total))
+    base = total // jobs
+    remainder = total % jobs
+    return [base + (1 if index < remainder else 0) for index in range(jobs)]
+
 
 
 def _replace_or_add(argv: Sequence[str], flag: str, value: str) -> List[str]:
@@ -65,8 +89,10 @@ def _replace_or_add(argv: Sequence[str], flag: str, value: str) -> List[str]:
     return result
 
 
-def _worker_runtime_root(base_runtime_dir: Path, worker_index: int) -> Path:
-    return base_runtime_dir / f'worker_{worker_index:02d}'
+
+def _job_runtime_root(base_runtime_dir: Path, job_index: int) -> Path:
+    return base_runtime_dir / f'job_{job_index:04d}'
+
 
 
 def _build_learning_args(args) -> List[str]:
@@ -103,6 +129,7 @@ def _build_learning_args(args) -> List[str]:
     return argv
 
 
+
 def _build_auto_learning_args(args) -> List[str]:
     argv: List[str] = [
         '--lexicon', args.lexicon,
@@ -136,10 +163,30 @@ def _build_auto_learning_args(args) -> List[str]:
     return argv
 
 
-def _build_worker_specs(args) -> tuple[List[ParallelWorkerSpec], Path]:
+
+def _resolve_scheduler_config(args) -> ParallelSchedulerConfig:
+    settings = load_settings()
+    total_episodes = max(1, int(getattr(args, 'episodes', 1) or 1))
+    requested_tasks = max(1, int(getattr(args, 'learning_tasks', 1) or 1))
+    logical_jobs = max(1, min(requested_tasks, total_episodes))
+    configured_max_workers = max(
+        1,
+        int(get_setting(settings, 'learning', 'parallel', 'max_workers', default=50)),
+    )
+    max_workers = min(logical_jobs, configured_max_workers)
+    return ParallelSchedulerConfig(
+        requested_tasks=requested_tasks,
+        logical_jobs=logical_jobs,
+        max_workers=max_workers,
+        episodes_total=total_episodes,
+        use_queue=logical_jobs > max_workers,
+    )
+
+
+
+def _build_job_specs(args, scheduler: ParallelSchedulerConfig) -> tuple[List[ParallelJobSpec], Path]:
     mode = str(args.mode)
-    total_episodes = max(1, int(args.episodes))
-    task_count = max(1, min(int(getattr(args, 'learning_tasks', 1) or 1), total_episodes))
+    total_episodes = scheduler.episodes_total
     if mode == 'learn' and not (getattr(args, 'text', '') or getattr(args, 'words', None)):
         raise ValueError('Parallel learn mode requires --text or --words.')
 
@@ -154,46 +201,48 @@ def _build_worker_specs(args) -> tuple[List[ParallelWorkerSpec], Path]:
     else:
         raise ValueError(f'Unsupported parallel mode: {mode}')
 
-    episode_splits = _split_episodes(total_episodes, task_count)
-    specs: List[ParallelWorkerSpec] = []
+    episode_splits = _split_episodes(total_episodes, scheduler.logical_jobs)
+    specs: List[ParallelJobSpec] = []
     episode_offset = 0
-    for worker_index, worker_episodes in enumerate(episode_splits, start=1):
-        worker_root = _worker_runtime_root(base_runtime_dir, worker_index)
-        logs_dir = worker_root / 'logs'
-        traces_dir = worker_root / 'traces'
-        datasets_dir = worker_root / 'datasets'
-        policy_memory_path = worker_root / 'policy_memory.json'
-        action_bandit_path = worker_root / 'action_bandit.json'
-        unknown_pending_path = worker_root / 'unknown_word_candidates.jsonl'
-        unknown_overlay_path = worker_root / 'lexicon_overlay.json'
+    for job_index, job_episodes in enumerate(episode_splits, start=1):
+        job_root = _job_runtime_root(base_runtime_dir, job_index)
+        logs_dir = job_root / 'logs'
+        traces_dir = job_root / 'traces'
+        datasets_dir = job_root / 'datasets'
+        policy_memory_path = job_root / 'policy_memory.json'
+        action_bandit_path = job_root / 'action_bandit.json'
+        unknown_pending_path = job_root / 'unknown_word_candidates.jsonl'
+        unknown_overlay_path = job_root / 'lexicon_overlay.json'
 
-        worker_argv = list(base_argv)
-        worker_argv = _replace_or_add(worker_argv, '--episodes', str(worker_episodes))
-        worker_argv = _replace_or_add(worker_argv, '--trace-dir', str(traces_dir))
-        worker_argv = _replace_or_add(worker_argv, '--dataset-dir', str(datasets_dir))
-        worker_argv = _replace_or_add(worker_argv, '--policy-memory', str(policy_memory_path))
-        worker_argv = _replace_or_add(worker_argv, '--action-bandit', str(action_bandit_path))
-        worker_argv = _replace_or_add(worker_argv, '--log-dir', str(logs_dir))
+        job_argv = list(base_argv)
+        job_argv = _replace_or_add(job_argv, '--episodes', str(job_episodes))
+        job_argv = _replace_or_add(job_argv, '--trace-dir', str(traces_dir))
+        job_argv = _replace_or_add(job_argv, '--dataset-dir', str(datasets_dir))
+        job_argv = _replace_or_add(job_argv, '--policy-memory', str(policy_memory_path))
+        job_argv = _replace_or_add(job_argv, '--action-bandit', str(action_bandit_path))
+        job_argv = _replace_or_add(job_argv, '--log-dir', str(logs_dir))
         if mode == 'auto-learn':
-            worker_argv = _replace_or_add(worker_argv, '--loop-index-offset', str(episode_offset))
+            job_argv = _replace_or_add(job_argv, '--loop-index-offset', str(episode_offset))
 
         specs.append(
-            ParallelWorkerSpec(
+            ParallelJobSpec(
                 mode=mode,
-                worker_index=worker_index,
-                episodes=worker_episodes,
-                argv=worker_argv,
+                job_index=job_index,
+                episodes=job_episodes,
+                argv=job_argv,
                 policy_memory_path=str(policy_memory_path),
                 action_bandit_path=str(action_bandit_path),
                 unknown_pending_path=str(unknown_pending_path),
                 unknown_overlay_path=str(unknown_overlay_path),
+                runtime_root=str(job_root),
             )
         )
-        episode_offset += worker_episodes
+        episode_offset += job_episodes
     return specs, base_runtime_dir
 
 
-def _run_parallel_worker(spec: ParallelWorkerSpec) -> ParallelWorkerResult:
+
+def _run_parallel_job(spec: ParallelJobSpec) -> ParallelJobResult:
     os.environ['LSLM_UNKNOWN_WORD_PENDING_PATH'] = spec.unknown_pending_path
     os.environ['LSLM_UNKNOWN_WORD_OVERLAY_PATH'] = spec.unknown_overlay_path
     try:
@@ -207,15 +256,17 @@ def _run_parallel_worker(spec: ParallelWorkerSpec) -> ParallelWorkerResult:
     finally:
         os.environ.pop('LSLM_UNKNOWN_WORD_PENDING_PATH', None)
         os.environ.pop('LSLM_UNKNOWN_WORD_OVERLAY_PATH', None)
-    return ParallelWorkerResult(
-        worker_index=spec.worker_index,
+    return ParallelJobResult(
+        job_index=spec.job_index,
         exit_code=exit_code,
         episodes=spec.episodes,
         policy_memory_path=spec.policy_memory_path,
         action_bandit_path=spec.action_bandit_path,
         unknown_pending_path=spec.unknown_pending_path,
         unknown_overlay_path=spec.unknown_overlay_path,
+        runtime_root=spec.runtime_root,
     )
+
 
 
 def _merge_policy_memory(worker_paths: Sequence[str], destination_path: str) -> Path:
@@ -249,6 +300,7 @@ def _merge_policy_memory(worker_paths: Sequence[str], destination_path: str) -> 
             if record.template_id:
                 existing.template_id = record.template_id
     return merged.save()
+
 
 
 def _merge_action_bandit(worker_paths: Sequence[str], destination_path: str) -> Path:
@@ -287,6 +339,7 @@ def _merge_action_bandit(worker_paths: Sequence[str], destination_path: str) -> 
     return merged.save()
 
 
+
 def _merge_unknown_overlay(worker_paths: Sequence[str], destination_path: str) -> Path:
     destination = Path(destination_path)
     payload: dict[str, object] = {'meta': {'version': 'unknown-overlay-v1'}, 'entries': {}}
@@ -308,6 +361,7 @@ def _merge_unknown_overlay(worker_paths: Sequence[str], destination_path: str) -
     return destination
 
 
+
 def _merge_unknown_pending(worker_paths: Sequence[str], destination_path: str) -> Path:
     destination = Path(destination_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -323,43 +377,143 @@ def _merge_unknown_pending(worker_paths: Sequence[str], destination_path: str) -
     return destination
 
 
+
+def _job_summary(result: ParallelJobResult) -> dict[str, object]:
+    return {
+        'job_index': result.job_index,
+        'episodes': result.episodes,
+        'exit_code': result.exit_code,
+        'runtime_root': result.runtime_root,
+        'policy_memory_path': result.policy_memory_path,
+        'action_bandit_path': result.action_bandit_path,
+        'unknown_pending_path': result.unknown_pending_path,
+        'unknown_overlay_path': result.unknown_overlay_path,
+    }
+
+
+
+def _write_summary(
+    *,
+    destination_dir: Path,
+    scheduler: ParallelSchedulerConfig,
+    results: Sequence[ParallelJobResult],
+    merged_policy: Path | None,
+    merged_bandit: Path | None,
+    merged_pending: Path,
+    merged_overlay: Path,
+) -> Path:
+    reward_paths = [Path(item.action_bandit_path) for item in results]
+    summary_path = destination_dir / 'summary.json'
+    payload = {
+        'scheduler': asdict(scheduler),
+        'job_count': len(results),
+        'completed_jobs': [
+            _job_summary(item)
+            for item in results
+        ],
+        'merged_outputs': {
+            'policy_memory': str(merged_policy) if merged_policy else None,
+            'action_bandit': str(merged_bandit) if merged_bandit else None,
+            'unknown_pending': str(merged_pending),
+            'unknown_overlay': str(merged_overlay),
+        },
+        'job_artifacts_existing': {
+            'action_bandit': sum(1 for path in reward_paths if path.exists()),
+        },
+    }
+    summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    return summary_path
+
+
+
+def _iter_completed_jobs(executor: ProcessPoolExecutor, specs: Iterable[ParallelJobSpec]):
+    future_map = {executor.submit(_run_parallel_job, spec): spec for spec in specs}
+    for future in as_completed(future_map):
+        yield future.result()
+
+
+
 def run_parallel_learning(args) -> int:
-    specs, base_runtime_dir = _build_worker_specs(args)
-    worker_count = len(specs)
+    scheduler = _resolve_scheduler_config(args)
+    specs, base_runtime_dir = _build_job_specs(args, scheduler)
+
     LOGGER.info(
-        'parallel_learning.start mode=%s workers=%s episodes=%s root=%s',
+        'parallel_learning.start mode=%s requested_tasks=%s logical_jobs=%s max_workers=%s episodes=%s root=%s',
         args.mode,
-        worker_count,
-        args.episodes,
+        scheduler.requested_tasks,
+        scheduler.logical_jobs,
+        scheduler.max_workers,
+        scheduler.episodes_total,
         base_runtime_dir,
     )
-    print(f'[parallel] mode={args.mode} tasks={worker_count} episodes={args.episodes}')
+    print(
+        f'[parallel] mode={args.mode} requested_tasks={scheduler.requested_tasks} '
+        f'logical_jobs={scheduler.logical_jobs} max_workers={scheduler.max_workers}'
+    )
     print(f'[parallel] runtime_root={base_runtime_dir}')
+    if scheduler.use_queue:
+        print('[parallel] scheduler=bounded queue mode enabled')
 
-    results: List[ParallelWorkerResult] = []
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {executor.submit(_run_parallel_worker, spec): spec for spec in specs}
-        for future in as_completed(future_map):
-            result = future.result()
+    results: List[ParallelJobResult] = []
+    with ProcessPoolExecutor(max_workers=scheduler.max_workers) as executor:
+        for result in _iter_completed_jobs(executor, specs):
             results.append(result)
-            print(f'[parallel] worker={result.worker_index} episodes={result.episodes} exit={result.exit_code}')
+            print(
+                f'[parallel] job={result.job_index:04d} '
+                f'episodes={result.episodes} exit={result.exit_code}'
+            )
             if result.exit_code != 0:
-                raise RuntimeError(f'Parallel worker {result.worker_index} failed with exit code {result.exit_code}.')
+                raise RuntimeError(
+                    f'Parallel job {result.job_index} failed with exit code {result.exit_code}.'
+                )
 
-    results.sort(key=lambda item: item.worker_index)
+    results.sort(key=lambda item: item.job_index)
     policy_paths = [item.policy_memory_path for item in results]
     bandit_paths = [item.action_bandit_path for item in results]
     pending_paths = [item.unknown_pending_path for item in results]
     overlay_paths = [item.unknown_overlay_path for item in results]
 
-    merged_policy = _merge_policy_memory(policy_paths, str(args.policy_memory)) if not getattr(args, 'no_policy_memory', False) else None
-    merged_bandit = _merge_action_bandit(bandit_paths, str(args.action_bandit)) if not getattr(args, 'no_action_bandit', False) else None
+    merged_policy = (
+        _merge_policy_memory(policy_paths, str(args.policy_memory))
+        if not getattr(args, 'no_policy_memory', False)
+        else None
+    )
+    merged_bandit = (
+        _merge_action_bandit(bandit_paths, str(args.action_bandit))
+        if not getattr(args, 'no_action_bandit', False)
+        else None
+    )
     merged_pending = _merge_unknown_pending(pending_paths, 'runtime/unknown_word_candidates.jsonl')
     merged_overlay = _merge_unknown_overlay(overlay_paths, 'runtime/lexicon_overlay.json')
+    summary_path = _write_summary(
+        destination_dir=base_runtime_dir,
+        scheduler=scheduler,
+        results=results,
+        merged_policy=merged_policy,
+        merged_bandit=merged_bandit,
+        merged_pending=merged_pending,
+        merged_overlay=merged_overlay,
+    )
 
-    print(f'[parallel] merged_policy_memory={merged_policy}' if merged_policy else '[parallel] merged_policy_memory=disabled')
-    print(f'[parallel] merged_action_bandit={merged_bandit}' if merged_bandit else '[parallel] merged_action_bandit=disabled')
+    print(
+        f'[parallel] merged_policy_memory={merged_policy}'
+        if merged_policy
+        else '[parallel] merged_policy_memory=disabled'
+    )
+    print(
+        f'[parallel] merged_action_bandit={merged_bandit}'
+        if merged_bandit
+        else '[parallel] merged_action_bandit=disabled'
+    )
     print(f'[parallel] merged_unknown_pending={merged_pending}')
     print(f'[parallel] merged_unknown_overlay={merged_overlay}')
-    LOGGER.info('parallel_learning.done mode=%s workers=%s root=%s', args.mode, len(results), base_runtime_dir)
+    print(f'[parallel] summary={summary_path}')
+    LOGGER.info(
+        'parallel_learning.done mode=%s logical_jobs=%s max_workers=%s root=%s summary=%s',
+        args.mode,
+        len(results),
+        scheduler.max_workers,
+        base_runtime_dir,
+        summary_path,
+    )
     return 0

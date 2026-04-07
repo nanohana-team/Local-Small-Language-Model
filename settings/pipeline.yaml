@@ -1,4 +1,10 @@
 pipeline:
+  input_focus:
+    enabled: true
+    max_segment_chars: 140
+    max_segments: 8
+    long_text_threshold: 80
+
   intent_planner:
     question_min_score: 1.0
     question_confidence_base: 0.72
@@ -25,6 +31,8 @@ pipeline:
     topic_context_confidence_bonus: 0.08
     topic_context_confidence_cap: 0.98
     confidence_extra_multiplier: 0.10
+    alternative_question_confidence_penalty: 0.10
+    alternative_question_policy_bonus: 0.12
 
   semantic_recall:
     max_candidates: 24
@@ -32,6 +40,8 @@ pipeline:
     relation_weight_scale: 0.85
     axis_weight_scale: 0.75
     input_weight: 1.25
+    function_seed_weight: 0.22
+    content_seed_weight: 1.00
     prefer_content_words_in_axis: true
     axis_probe_limit: 512
 
@@ -77,3 +87,21 @@ pipeline:
     diversity_similarity_threshold: 0.82
     diversity_frequency_bonus_penalty: 0.04
     diversity_frequency_cap: 0.24
+    generic_hedge_penalty: 0.16
+    clarify_question_bonus: 0.18
+
+  response_accumulation:
+    enabled: true
+    max_sentences: 3
+    max_chars: 180
+    min_chars_to_expand: 24
+    include_slot_detail: true
+    include_followup: true
+    include_context_bridge: true
+    similarity_threshold: 0.82
+
+  chat_history:
+    enabled: true
+    max_turns: 12
+    recent_response_window: 4
+

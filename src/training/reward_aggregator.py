@@ -15,15 +15,15 @@ from src.core.schema import (
 
 @dataclass(slots=True)
 class RewardAggregatorConfig:
-    alpha: float = 0.8
-    beta: float = 0.2
+    alpha: float = 0.7
+    beta: float = 0.3
     fallback_strategy: str = "neutral"
     neutral_external_score: float = 0.5
     use_power_transform: bool = False
     external_power: float = 1.5
-    mismatch_internal_threshold: float = 0.80
-    mismatch_external_threshold: float = 0.20
-    mismatch_penalty: float = 0.18
+    mismatch_internal_threshold: float = 0.76
+    mismatch_external_threshold: float = 0.24
+    mismatch_penalty: float = 0.24
 
 
 class RewardAggregator:

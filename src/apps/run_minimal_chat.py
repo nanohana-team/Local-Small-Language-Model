@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import logging
+import re
 import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from src.core.io.lsd_lexicon import load_lexicon_container
@@ -18,13 +20,18 @@ from src.core.recall.semantic_recall import SemanticRecallConfig, recall_semanti
 from src.core.scoring.basic_scorer import BasicScorerConfig, choose_best_response
 from src.core.schema import (
     ActionCandidateSnapshot,
+    AxisVector,
     DialogueState,
     EpisodeAction,
     ExternalRewardBreakdown,
     ExternalRewardComponent,
     InternalRewardBreakdown,
     LexiconContainer,
+    RealizationCandidate,
     RewardBreakdown,
+    ScoreBreakdown,
+    ResponseResult,
+    SlotValue,
     SlotTrace,
     SlotTraceItem,
     TokenizationToken,
@@ -56,6 +63,428 @@ class TokenizationResult:
     normalized_tokens: List[str] = field(default_factory=list)
     tokenization: List[TokenizationToken] = field(default_factory=list)
     unknown_spans: List[UnknownSpan] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class InputSegment:
+    text: str
+    start: int = 0
+    end: int = 0
+    question_like: bool = False
+    alternative_branch: bool = False
+    score: float = 0.0
+
+
+@dataclass(slots=True)
+class InputFocusConfig:
+    enabled: bool = True
+    max_segment_chars: int = 140
+    max_segments: int = 8
+    long_text_threshold: int = 80
+    alternative_markers: Tuple[str, ...] = ("それとも", "または", "あるいは", "or", "OR")
+
+
+@dataclass(slots=True)
+class InputFocusDecision:
+    original_text: str
+    focused_text: str
+    segments: List[InputSegment] = field(default_factory=list)
+    used_segmentation: bool = False
+    has_alternative_question: bool = False
+    question_like_segment_count: int = 0
+    reason: str = ''
+
+
+@dataclass(slots=True)
+class ResponseAccumulationConfig:
+    enabled: bool = True
+    max_sentences: int = 3
+    max_chars: int = 180
+    min_chars_to_expand: int = 24
+    include_slot_detail: bool = True
+    include_followup: bool = True
+    include_context_bridge: bool = True
+    similarity_threshold: float = 0.82
+
+
+@dataclass(slots=True)
+class ChatHistoryConfig:
+    enabled: bool = True
+    max_turns: int = 12
+    recent_response_window: int = 4
+
+
+@dataclass(slots=True)
+class ChatTurnRecord:
+    role: str
+    text: str
+    intent: str = ''
+    topic: str = ''
+    policy: str = ''
+    turn_id: str = ''
+    timestamp: str = ''
+
+
+@dataclass(slots=True)
+class ChatRuntimeContext:
+    session_id: str = ''
+    dialogue_state: DialogueState = field(default_factory=DialogueState)
+    history: List[ChatTurnRecord] = field(default_factory=list)
+    history_path: str = ''
+    history_enabled: bool = True
+    max_turns: int = 12
+    recent_response_window: int = 4
+
+    def trim_history(self) -> None:
+        limit = max(1, int(self.max_turns)) * 2
+        if len(self.history) > limit:
+            self.history = self.history[-limit:]
+
+    def recent_response_texts(self) -> List[str]:
+        texts = [item.text for item in self.history if item.role == 'assistant' and str(item.text).strip()]
+        window = max(1, int(self.recent_response_window))
+        return texts[-window:]
+
+    def recent_user_texts(self) -> List[str]:
+        texts = [item.text for item in self.history if item.role == 'user' and str(item.text).strip()]
+        window = max(1, int(self.recent_response_window))
+        return texts[-window:]
+
+
+def _normalize_sentence(text: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return ''
+    if not value.endswith(('。', '？', '!', '！')):
+        value += '。'
+    return value
+
+
+def _text_similarity(left: str, right: str) -> float:
+    left = str(left or '').strip()
+    right = str(right or '').strip()
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    if len(left) < 2 or len(right) < 2:
+        return 1.0 if left == right else 0.0
+    left_bigrams = {left[index:index + 2] for index in range(len(left) - 1)}
+    right_bigrams = {right[index:index + 2] for index in range(len(right) - 1)}
+    if not left_bigrams or not right_bigrams:
+        return 0.0
+    return len(left_bigrams & right_bigrams) / float(len(left_bigrams | right_bigrams))
+
+
+def _dedupe_sentences_keep_order(sentences: Sequence[str], similarity_threshold: float = 0.82) -> List[str]:
+    kept: List[str] = []
+    normalized_kept: List[str] = []
+    for sentence in sentences:
+        normalized = _normalize_sentence(sentence)
+        if not normalized:
+            continue
+        if any(_text_similarity(normalized.rstrip('。？！!?'), prev.rstrip('。？！!?')) >= similarity_threshold for prev in normalized_kept):
+            continue
+        kept.append(normalized)
+        normalized_kept.append(normalized)
+    return kept
+
+
+def _restore_dialogue_state(data: Optional[Dict[str, Any]]) -> DialogueState:
+    if not isinstance(data, dict):
+        return DialogueState()
+    context_vector = data.get('context_vector', {})
+    return DialogueState(
+        current_topic=str(data.get('current_topic', '') or ''),
+        last_subject=str(data.get('last_subject', '') or ''),
+        last_object=str(data.get('last_object', '') or ''),
+        referents={str(k): str(v) for k, v in dict(data.get('referents', {}) or {}).items()},
+        context_vector=AxisVector.from_dict(context_vector),
+        inferred_intent_history=[str(item) for item in list(data.get('inferred_intent_history', []) or []) if str(item).strip()],
+        variables=dict(data.get('variables', {}) or {}),
+    )
+
+
+def load_chat_runtime_context(
+    *,
+    session_id: str = '',
+    history_path: str = '',
+    history_enabled: bool = True,
+    max_turns: int = 12,
+    recent_response_window: int = 4,
+    reset: bool = False,
+) -> ChatRuntimeContext:
+    context = ChatRuntimeContext(
+        session_id=str(session_id or '').strip() or new_session_id(),
+        history_path=str(history_path or '').strip(),
+        history_enabled=bool(history_enabled),
+        max_turns=max(1, int(max_turns)),
+        recent_response_window=max(1, int(recent_response_window)),
+    )
+    if not context.history_enabled or not context.history_path or reset:
+        return context
+
+    path = Path(context.history_path)
+    if not path.exists():
+        return context
+
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        LOGGER.exception('chat_history.load_failed path=%s', path)
+        return context
+
+    if isinstance(payload, dict):
+        stored_session_id = str(payload.get('session_id', '') or '').strip()
+        if stored_session_id:
+            context.session_id = stored_session_id
+        context.dialogue_state = _restore_dialogue_state(payload.get('dialogue_state'))
+        history_items = []
+        for item in list(payload.get('history', []) or []):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get('text', '') or '').strip()
+            role = str(item.get('role', '') or '').strip()
+            if not text or role not in {'user', 'assistant'}:
+                continue
+            history_items.append(ChatTurnRecord(
+                role=role,
+                text=text,
+                intent=str(item.get('intent', '') or ''),
+                topic=str(item.get('topic', '') or ''),
+                policy=str(item.get('policy', '') or ''),
+                turn_id=str(item.get('turn_id', '') or ''),
+                timestamp=str(item.get('timestamp', '') or ''),
+            ))
+        context.history = history_items
+        context.trim_history()
+        LOGGER.info('chat_history.loaded path=%s turns=%s session_id=%s', path, len(context.history), context.session_id)
+    return context
+
+
+def save_chat_runtime_context(context: ChatRuntimeContext) -> Optional[Path]:
+    if not context.history_enabled or not context.history_path:
+        return None
+    path = Path(context.history_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    context.trim_history()
+    payload = {
+        'session_id': context.session_id,
+        'saved_at': datetime.now(JST).isoformat(timespec='seconds'),
+        'dialogue_state': dataclass_to_dict(context.dialogue_state),
+        'history': [dataclass_to_dict(item) for item in context.history],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    return path
+
+
+def _append_history_item(
+    context: Optional[ChatRuntimeContext],
+    *,
+    role: str,
+    text: str,
+    turn_id: str,
+    intent: str = '',
+    topic: str = '',
+    policy: str = '',
+) -> None:
+    if context is None or not context.history_enabled:
+        return
+    normalized = _normalize_sentence(text) if role == 'assistant' else str(text or '').strip()
+    if not normalized:
+        return
+    context.history.append(
+        ChatTurnRecord(
+            role=role,
+            text=normalized,
+            intent=intent,
+            topic=topic,
+            policy=policy,
+            turn_id=turn_id,
+            timestamp=datetime.now(JST).isoformat(timespec='seconds'),
+        )
+    )
+    context.trim_history()
+
+
+def _history_summary(context: Optional[ChatRuntimeContext], max_items: int = 6) -> List[Dict[str, str]]:
+    if context is None or not context.history:
+        return []
+    items = context.history[-max(1, int(max_items)): ]
+    return [
+        {
+            'role': item.role,
+            'text': item.text,
+            'intent': item.intent,
+            'topic': item.topic,
+            'policy': item.policy,
+            'turn_id': item.turn_id,
+            'timestamp': item.timestamp,
+        }
+        for item in items
+    ]
+
+
+def _maybe_apply_topic_history_fallback(
+    *,
+    raw_text: str,
+    dialogue_state: DialogueState,
+    filled_slots,
+) -> bool:
+    current_topic = str(dialogue_state.current_topic or '').strip()
+    if not current_topic:
+        return False
+    if len(str(raw_text or '').strip()) > 24:
+        return False
+
+    generic_topics = {'これ', 'それ', 'あれ', 'こと', 'もの', '何', 'なに', '何か', 'どう', 'どれ', '良い', 'いい'}
+    topic_slot = filled_slots.values.get('topic')
+    topic_value = str(topic_slot.value or '').strip() if topic_slot is not None else ''
+    if topic_value and topic_value not in generic_topics:
+        return False
+
+    filled_slots.values['topic'] = SlotValue(
+        slot_name='topic',
+        value=current_topic,
+        confidence=max(0.62, float(topic_slot.confidence) if topic_slot is not None else 0.0),
+        source_candidate=current_topic,
+        inferred=True,
+        note='topic_from_history_short_followup',
+    )
+    if 'topic' in filled_slots.optional_unfilled:
+        filled_slots.optional_unfilled = [name for name in filled_slots.optional_unfilled if name != 'topic']
+    filled_slots.consistency_score = max(float(filled_slots.consistency_score), 0.62)
+    return True
+
+
+def _build_accumulated_response(
+    *,
+    base_text: str,
+    input_state,
+    intent_plan,
+    filled_slots,
+    dialogue_state: DialogueState,
+    runtime_context: Optional[ChatRuntimeContext],
+    config: ResponseAccumulationConfig,
+    lexicon: Optional[LexiconContainer],
+) -> Tuple[str, Dict[str, Any]]:
+    normalized_base = _normalize_sentence(base_text)
+    if not config.enabled or not normalized_base:
+        return normalized_base or str(base_text or '').strip(), {
+            'enabled': bool(config.enabled),
+            'applied': False,
+            'reason': 'disabled_or_empty',
+            'sentences': [normalized_base] if normalized_base else [],
+        }
+    if len(normalized_base) >= int(config.max_chars):
+        return normalized_base, {
+            'enabled': True,
+            'applied': False,
+            'reason': 'base_too_long',
+            'sentences': [normalized_base],
+        }
+
+    topic = ''
+    state = ''
+    cause = ''
+    time_value = ''
+    location = ''
+    target = ''
+    predicate = ''
+    if filled_slots.values.get('topic') is not None:
+        topic = str(filled_slots.values['topic'].value or '').strip()
+    if filled_slots.values.get('state') is not None:
+        state = str(filled_slots.values['state'].value or '').strip()
+    if filled_slots.values.get('cause') is not None:
+        cause = str(filled_slots.values['cause'].value or '').strip()
+    if filled_slots.values.get('time') is not None:
+        time_value = str(filled_slots.values['time'].value or '').strip()
+    if filled_slots.values.get('location') is not None:
+        location = str(filled_slots.values['location'].value or '').strip()
+    if filled_slots.values.get('target') is not None:
+        target = str(filled_slots.values['target'].value or '').strip()
+    if filled_slots.values.get('predicate') is not None:
+        predicate = str(filled_slots.values['predicate'].value or '').strip()
+
+    topic = topic or str(dialogue_state.current_topic or '').strip()
+    focus = topic or target
+
+    extras: List[str] = []
+    if config.include_context_bridge and len(str(input_state.raw_text or '').strip()) <= 20 and topic:
+        extras.append(f'今の流れだと、{topic}の話として続けて考えるのが自然です。')
+
+    if config.include_slot_detail:
+        if intent_plan.intent == 'explain':
+            if focus and cause:
+                extras.append(f'{focus}を見るときは、{cause}も一緒に切り分けると整理しやすいです。')
+            elif focus and state:
+                extras.append(f'{focus}は、いまは{state}として見ると捉えやすいです。')
+        elif intent_plan.intent == 'ask_recommendation':
+            if focus and state:
+                extras.append(f'{focus}は、{state}寄りかどうかを軸にすると候補を絞りやすいです。')
+            elif focus:
+                extras.append(f'{focus}は、条件を一つ決めるだけでも選びやすさがかなり変わります。')
+        elif intent_plan.intent == 'ask_progress':
+            if focus and time_value:
+                extras.append(f'{time_value}時点で見るのか最新で見るのかで、{focus}の見え方は少し変わります。')
+            elif focus:
+                extras.append(f'{focus}は、今どの段階かを一つずつ分けて見ると把握しやすいです。')
+        elif intent_plan.intent == 'ask_availability':
+            if time_value or location:
+                joined = '・'.join([value for value in [time_value, location] if value])
+                extras.append(f'{joined}の条件が固まっているなら、そこから先に見るとかなり早いです。')
+        elif intent_plan.intent == 'ask_fact':
+            if focus:
+                extras.append(f'{focus}は、前提条件を先に固定すると解釈のズレを減らしやすいです。')
+        elif intent_plan.intent == 'empathy':
+            if state and cause:
+                extras.append(f'{cause}が重なっているなら、{state}になるのも無理はないです。')
+        elif intent_plan.intent == 'confirm':
+            if focus:
+                extras.append(f'{focus}については、その前提で進めて問題なさそうです。')
+        else:
+            if focus and predicate:
+                extras.append(f'{focus}の中では、特に{predicate}の部分を掘ると話が進めやすいです。')
+            elif focus and state:
+                extras.append(f'{focus}は、いまは{state}の方向として受け取るのが自然です。')
+
+    if config.include_followup:
+        if intent_plan.intent in {'ask_recommendation', 'ask_progress', 'ask_availability', 'ask_fact'}:
+            extras.append('条件や範囲がもう一つあると、ここからかなり具体化できます。')
+        elif intent_plan.intent == 'explain':
+            extras.append('必要なら、このまま要点を一つずつ分けて整理できます。')
+        elif intent_plan.intent in {'respond', 'smalltalk_expand', 'share_experience'}:
+            extras.append('気になる点が一つあれば、そこだけ続けて掘れます。')
+
+    sentences = _dedupe_sentences_keep_order([normalized_base] + extras, similarity_threshold=float(config.similarity_threshold))
+    limited: List[str] = []
+    current_length = 0
+    for sentence in sentences:
+        projected = current_length + len(sentence)
+        if limited and (len(limited) >= int(config.max_sentences) or projected > int(config.max_chars)):
+            break
+        limited.append(sentence)
+        current_length = projected
+
+    if len(normalized_base) < int(config.min_chars_to_expand) and len(limited) == 1 and extras:
+        for sentence in sentences[1:]:
+            candidate_length = current_length + len(sentence)
+            if len(limited) >= int(config.max_sentences) or candidate_length > int(config.max_chars):
+                break
+            limited.append(sentence)
+            current_length = candidate_length
+            break
+
+    final_text = ''.join(limited) if limited else normalized_base
+    applied = len(limited) > 1 and final_text != normalized_base
+    return final_text, {
+        'enabled': True,
+        'applied': applied,
+        'reason': 'expanded' if applied else 'base_only',
+        'sentences': limited,
+        'base_text': normalized_base,
+        'history_size': len(runtime_context.history) if runtime_context is not None else 0,
+    }
 
 
 class SurfaceNormalizer:
@@ -119,7 +548,7 @@ class SurfaceNormalizer:
         )
 
     def tokenize_text(self, raw_text: str) -> TokenizationResult:
-        text = str(raw_text or "").strip()
+        text = self._apply_pre_token_replacements(str(raw_text or "")).strip()
         if not text:
             return TokenizationResult()
 
@@ -215,6 +644,21 @@ class SurfaceNormalizer:
             "pending_path": learning_result.pending_path,
             "retokenized": bool(learning_result.applied_words),
         }
+
+    def _apply_pre_token_replacements(self, text: str) -> str:
+        if not text:
+            return text
+        replacements = {
+            "それとも": " それとも ",
+            "または": " または ",
+            "あるいは": " あるいは ",
+            "けれども": " けれども ",
+            "ですが": " ですが ",
+        }
+        normalized = str(text)
+        for src, dst in replacements.items():
+            normalized = normalized.replace(src, dst)
+        return normalized
 
     def _build_surface_map(self, lexicon: LexiconContainer) -> Dict[str, List[str]]:
         mapping: Dict[str, List[str]] = {}
@@ -442,6 +886,167 @@ class SurfaceNormalizer:
         return ch in "、。,.!?！？()（）[]{}「」『』:;：；/\\"
 
 
+def _looks_like_question_text(text: str) -> bool:
+    text = str(text or '').strip()
+    if not text:
+        return False
+    question_words = ("どう", "どこ", "いつ", "なに", "何", "どんな", "どれ", "どうして", "なぜ")
+    if any(marker in text for marker in ('?', '？')):
+        return True
+    if any(word in text for word in question_words):
+        return True
+    return bool(re.search(r'(ですか|ますか|でしょうか|かな|か)$', text))
+
+
+def _split_input_segments(raw_text: str, config: InputFocusConfig) -> List[InputSegment]:
+    text = str(raw_text or '').strip()
+    if not text:
+        return []
+
+    markers = tuple(config.alternative_markers)
+    segments: List[InputSegment] = []
+    start = 0
+    i = 0
+    alternative_branch = False
+
+    def push(end_index: int, *, alt_branch: bool = False) -> None:
+        nonlocal start
+        piece = text[start:end_index].strip(' 、。！？?!')
+        if not piece:
+            start = end_index
+            return
+        question_like = _looks_like_question_text(piece)
+        score = (3.0 if question_like else 0.0) + min(2.0, len(piece) / 40.0)
+        segments.append(
+            InputSegment(
+                text=piece,
+                start=start,
+                end=end_index,
+                question_like=question_like,
+                alternative_branch=alt_branch,
+                score=score,
+            )
+        )
+        start = end_index
+
+    while i < len(text):
+        matched_marker = None
+        for marker in markers:
+            if text.startswith(marker, i):
+                matched_marker = marker
+                break
+        if matched_marker is not None:
+            push(i, alt_branch=alternative_branch)
+            i += len(matched_marker)
+            start = i
+            alternative_branch = True
+            continue
+        ch = text[i]
+        if ch in '。！？?!':
+            push(i + 1, alt_branch=alternative_branch)
+            alternative_branch = False
+            i += 1
+            continue
+        if i - start >= config.max_segment_chars and ch in '、,，;； ':
+            push(i + 1, alt_branch=alternative_branch)
+            alternative_branch = False
+        i += 1
+
+    if start < len(text):
+        push(len(text), alt_branch=alternative_branch)
+
+    if len(segments) > config.max_segments:
+        segments = segments[: config.max_segments]
+    return segments
+
+
+def choose_input_focus(raw_text: str, normalizer: SurfaceNormalizer, config: InputFocusConfig) -> InputFocusDecision:
+    text = str(raw_text or '').strip()
+    if not text or not config.enabled:
+        return InputFocusDecision(original_text=text, focused_text=text, reason='focus_disabled')
+
+    segments = _split_input_segments(text, config)
+    if len(segments) <= 1 and len(text) <= config.long_text_threshold:
+        return InputFocusDecision(
+            original_text=text,
+            focused_text=text,
+            segments=segments,
+            used_segmentation=False,
+            has_alternative_question=False,
+            question_like_segment_count=sum(1 for seg in segments if seg.question_like),
+            reason='single_segment',
+        )
+
+    best_segment = None
+    best_score = float('-inf')
+    for seg in segments:
+        normalized_tokens = normalizer.normalize_text(seg.text)
+        content_hits = 0
+        question_hits = 0
+        for token in normalized_tokens:
+            entry = normalizer.lexicon.entries.get(token)
+            if entry is None:
+                continue
+            if entry.grammar.content_word:
+                content_hits += 1
+            if entry.grammar.pos == 'question_word' or token in {'どう', 'どこ', 'いつ', 'なに', '何', 'どんな', 'どれ', 'かな', 'か'}:
+                question_hits += 1
+        seg.score += (content_hits * 0.20) + (question_hits * 1.4)
+        if seg.question_like:
+            seg.score += 2.4
+            if seg.text.endswith(('?', '？', 'かな', 'ですか')):
+                seg.score += 1.2
+            if seg.end >= len(text):
+                seg.score += 1.0
+        if seg.alternative_branch:
+            seg.score += 0.4
+        if seg.score > best_score:
+            best_score = seg.score
+            best_segment = seg
+
+    if best_segment is None:
+        best_segment = InputSegment(text=text, question_like=_looks_like_question_text(text), score=0.0)
+
+    question_like_count = sum(1 for seg in segments if seg.question_like)
+    has_alternative_question = question_like_count >= 2 and any(seg.alternative_branch for seg in segments)
+    return InputFocusDecision(
+        original_text=text,
+        focused_text=best_segment.text or text,
+        segments=segments,
+        used_segmentation=True,
+        has_alternative_question=has_alternative_question,
+        question_like_segment_count=question_like_count,
+        reason='segment_focus' if len(segments) > 1 else 'long_text_focus',
+    )
+
+
+def _segment_summary(text: str, max_len: int = 16) -> str:
+    summary = re.sub(r'[。！？?!]+$', '', str(text or '').strip())
+    summary = re.sub(r'^(こんにちは|こんばんは|おはよう)[、。!！]*', '', summary).strip()
+    if len(summary) > max_len:
+        return summary[:max_len].rstrip() + '…'
+    return summary or 'その話'
+
+
+def build_long_context_candidate_text(raw_text: str, focus: InputFocusDecision) -> str:
+    text = str(raw_text or '')
+    if any(marker in text for marker in ('何から', 'どこから', 'まず何', '優先')):
+        return 'やることが多いので、まず時間や締切が決まっているものから一つずつ片付けるのがよさそうです。'
+    if any(marker in text for marker in ('どうしたら', 'どうすれば', 'どう考える')):
+        return '話題が多いので、一番気になっている点を一つに絞ると整理しやすいです。'
+    focused = _segment_summary(focus.focused_text, max_len=18)
+    return f'話題がいくつかあるので、まず{focused}から順番に整理すると考えやすいです。'
+
+
+def build_clarify_candidate_text(focus: InputFocusDecision) -> str:
+    question_segments = [seg for seg in focus.segments if seg.question_like]
+    if len(question_segments) >= 2:
+        left = _segment_summary(question_segments[0].text)
+        right = _segment_summary(question_segments[1].text)
+        return f"{left}のことと、{right}のことが混ざっているので、どちらから答えればいいですか？"
+    return '話題がいくつかあるので、先にどの部分から答えればいいですか？'
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LSLM v3 minimal chat runner")
     parser.add_argument("--lexicon", default=None, help="辞書ファイルパス (.json / .lsd / .lsdx)")
@@ -449,7 +1054,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--words", nargs="*", default=None, help="すでに分かち書き済みの入力トークン列")
     parser.add_argument("--trace-dir", default=None, help="trace JSONL の保存先ディレクトリ")
     parser.add_argument("--policy-memory", default=None, help="学習済み方針メモリ JSON")
+    parser.add_argument("--history-path", default=None, help="chat 履歴 JSON の保存先")
+    parser.add_argument("--session-id", default="", help="chat セッションID。未指定時は自動採番")
     parser.add_argument("--no-policy-memory", action="store_true", help="学習済み方針メモリを使わない")
+    parser.add_argument("--no-history", action="store_true", help="chat 履歴保持を使わない")
+    parser.add_argument("--reset-history", action="store_true", help="起動時に chat 履歴をリセットする")
     parser.add_argument("--no-trace", action="store_true", help="trace JSONL を保存しない")
     parser.add_argument("--console-debug", action="store_true", help="main 側互換用フラグ")
     return parser.parse_args(argv)
@@ -466,6 +1075,7 @@ def resolve_runtime_args(args: argparse.Namespace) -> argparse.Namespace:
             ("lexicon", ("paths", "lexicon"), "libs/dict.lsdx"),
             ("trace_dir", ("paths", "trace_dir"), "runtime/traces"),
             ("policy_memory", ("paths", "policy_memory"), "runtime/policy_memory.json"),
+            ("history_path", ("paths", "chat_history"), "runtime/chat_history/latest_session.json"),
         ],
     )
 
@@ -928,6 +1538,7 @@ def run_pipeline(
     args: argparse.Namespace,
     lexicon: LexiconContainer,
     normalizer: SurfaceNormalizer,
+    runtime_context: Optional[ChatRuntimeContext] = None,
 ) -> Tuple[str, Optional[Path]]:
     args = resolve_runtime_args(args)
     settings = load_settings()
@@ -943,17 +1554,55 @@ def run_pipeline(
         LOGGER.error("empty_input")
         raise ValueError("Input text is empty. Use --text or --words.")
 
-    tokenization_result = build_tokenization_result(raw_text=raw_text, explicit_words=args.words, normalizer=normalizer)
-    unknown_word_learning = normalizer.maybe_learn_unknown_words(raw_text=raw_text, tokenization_result=tokenization_result)
-    if unknown_word_learning.get("retokenized"):
-        tokenization_result = build_tokenization_result(raw_text=raw_text, explicit_words=args.words, normalizer=normalizer)
+    input_focus_config = build_dataclass_config(InputFocusConfig, get_setting(settings, "pipeline", "input_focus", default={}))
+    focus = choose_input_focus(raw_text=raw_text, normalizer=normalizer, config=input_focus_config)
+    focused_raw_text = focus.focused_text or raw_text
+    if focus.used_segmentation:
+        LOGGER.info("input.focus used_segmentation=%s reason=%s focused=%s segment_count=%s", focus.used_segmentation, focus.reason, focused_raw_text, len(focus.segments))
+
+    tokenization_result = build_tokenization_result(raw_text=focused_raw_text, explicit_words=args.words, normalizer=normalizer)
+    if focus.used_segmentation and len(focus.segments) >= 2:
+        unknown_word_learning = {
+            "enabled": bool(normalizer.unknown_word_learner),
+            "examined_spans": [],
+            "applied_words": [],
+            "skipped_spans": [],
+            "pending_records": [],
+            "retokenized": False,
+            "skipped_due_to_long_text": True,
+        }
+    else:
+        unknown_word_learning = normalizer.maybe_learn_unknown_words(raw_text=focused_raw_text, tokenization_result=tokenization_result)
+        if unknown_word_learning.get("retokenized"):
+            tokenization_result = build_tokenization_result(raw_text=focused_raw_text, explicit_words=args.words, normalizer=normalizer)
     tokens = list(tokenization_result.normalized_tokens)
     LOGGER.info("input raw_text=%s", raw_text)
+    if focus.used_segmentation and focused_raw_text != raw_text:
+        LOGGER.info("input focused_raw_text=%s", focused_raw_text)
     LOGGER.info("input tokens=%s", tokens)
     if tokenization_result.unknown_spans:
         LOGGER.info("input unknown_spans=%s", [item.surface for item in tokenization_result.unknown_spans])
 
-    session_id = new_session_id()
+    history_config = build_dataclass_config(ChatHistoryConfig, get_setting(settings, "pipeline", "chat_history", default={}))
+    if runtime_context is None and history_config.enabled and not bool(getattr(args, 'no_history', False)):
+        runtime_context = load_chat_runtime_context(
+            session_id=str(getattr(args, 'session_id', '') or ''),
+            history_path=str(getattr(args, 'history_path', '') or ''),
+            history_enabled=True,
+            max_turns=history_config.max_turns,
+            recent_response_window=history_config.recent_response_window,
+            reset=bool(getattr(args, 'reset_history', False)),
+        )
+    elif runtime_context is not None:
+        runtime_context.history_enabled = runtime_context.history_enabled and history_config.enabled and not bool(getattr(args, 'no_history', False))
+        runtime_context.max_turns = max(1, int(history_config.max_turns))
+        runtime_context.recent_response_window = max(1, int(history_config.recent_response_window))
+        if not runtime_context.session_id:
+            runtime_context.session_id = str(getattr(args, 'session_id', '') or '').strip() or new_session_id()
+        if not runtime_context.history_path:
+            runtime_context.history_path = str(getattr(args, 'history_path', '') or '').strip()
+
+    session_id = runtime_context.session_id if runtime_context is not None else (str(getattr(args, 'session_id', '') or '').strip() or new_session_id())
     turn_id = new_turn_id()
     episode_id = new_episode_id()
 
@@ -967,7 +1616,29 @@ def run_pipeline(
         turn_id=turn_id,
         timestamp=datetime.now(JST).isoformat(timespec="seconds"),
     )
-    dialogue_state = DialogueState()
+    dialogue_state = deepcopy(runtime_context.dialogue_state) if runtime_context is not None else DialogueState()
+    dialogue_state.variables["chat_history"] = _history_summary(runtime_context)
+    dialogue_state.variables["recent_user_texts"] = list(runtime_context.recent_user_texts()) if runtime_context is not None else []
+    dialogue_state.variables["recent_response_texts"] = list(runtime_context.recent_response_texts()) if runtime_context is not None else []
+    dialogue_state.variables["session_id"] = session_id
+    dialogue_state.variables["input_focus"] = {
+        "original_text": raw_text,
+        "focused_text": focused_raw_text,
+        "used_segmentation": focus.used_segmentation,
+        "has_alternative_question": focus.has_alternative_question,
+        "question_like_segment_count": focus.question_like_segment_count,
+        "segments": [
+            {
+                "text": seg.text,
+                "start": seg.start,
+                "end": seg.end,
+                "question_like": seg.question_like,
+                "alternative_branch": seg.alternative_branch,
+                "score": seg.score,
+            }
+            for seg in focus.segments
+        ],
+    }
     dialogue_state_before = deepcopy(dialogue_state)
 
     intent_planner_config = build_dataclass_config(IntentPlannerConfig, get_setting(settings, "pipeline", "intent_planner", default={}))
@@ -994,12 +1665,44 @@ def run_pipeline(
         dialogue_state=dialogue_state,
         config=slot_filler_config,
     )
+    topic_history_applied = _maybe_apply_topic_history_fallback(
+        raw_text=raw_text,
+        dialogue_state=dialogue_state,
+        filled_slots=filled_slots,
+    )
     surface_plan, candidates = realize_surface(
         filled_slots=filled_slots,
         intent_plan=intent_plan,
         lexicon=lexicon,
         config=surface_config,
     )
+
+    if focus.has_alternative_question:
+        clarify_text = build_clarify_candidate_text(focus)
+        candidates = [
+            RealizationCandidate(
+                text=clarify_text,
+                token_sequence=clarify_text.replace("。", "").split(),
+                template_id="clarify_alternative_input_v1",
+                grammar_violations=[],
+                slot_coverage=1.0 if filled_slots.values else 0.6,
+                semantic_score=0.86,
+                final_score=0.0,
+            )
+        ] + list(candidates)
+    elif focus.used_segmentation and len(focus.segments) >= 2:
+        long_text = build_long_context_candidate_text(raw_text, focus)
+        candidates = [
+            RealizationCandidate(
+                text=long_text,
+                token_sequence=long_text.replace("。", "").split(),
+                template_id="long_context_guidance_v1",
+                grammar_violations=[],
+                slot_coverage=0.92 if filled_slots.values else 0.68,
+                semantic_score=0.82,
+                final_score=0.0,
+            )
+        ] + list(candidates)
 
     policy_memory_matches: List[dict[str, object]] = []
     if not args.no_policy_memory:
@@ -1020,7 +1723,69 @@ def run_pipeline(
         filled_slots=filled_slots,
         candidates=candidates,
         config=scorer_config,
+        recent_texts=runtime_context.recent_response_texts() if runtime_context is not None else None,
     )
+
+    if focus.used_segmentation and len(focus.segments) >= 2 and not focus.has_alternative_question:
+        if response.text.startswith(("確認できる範囲",)) or any(marker in response.text for marker in ("と考えられます", "について", "自然です")):
+            override_text = build_long_context_candidate_text(raw_text, focus)
+            override_candidate = RealizationCandidate(
+                text=override_text,
+                token_sequence=override_text.replace("。", "").split(),
+                template_id="long_context_guidance_override_v1",
+                grammar_violations=[],
+                slot_coverage=0.9 if filled_slots.values else 0.7,
+                semantic_score=0.86,
+                final_score=max(0.78, response.score.total),
+            )
+            response.text = override_text
+            response.chosen_candidate = override_candidate
+            response.policy = "answer"
+            response.score.semantic_consistency = max(response.score.semantic_consistency, 0.78)
+            response.score.slot_fitness = max(response.score.slot_fitness, 0.60)
+            response.score.grammar_fitness = max(response.score.grammar_fitness, 0.92)
+            response.score.input_retention = max(response.score.input_retention, 0.52)
+            response.score.policy_fitness = max(response.score.policy_fitness, 0.88)
+            response.score.total = max(response.score.total, 0.78)
+            if "long_context_override" not in response.score.reasons:
+                response.score.reasons.append("long_context_override")
+            scored_candidates = [override_candidate] + list(scored_candidates)
+
+    response_accumulation_config = build_dataclass_config(ResponseAccumulationConfig, get_setting(settings, "pipeline", "response_accumulation", default={}))
+    accumulated_text, accumulation_debug = _build_accumulated_response(
+        base_text=response.text,
+        input_state=input_state,
+        intent_plan=intent_plan,
+        filled_slots=filled_slots,
+        dialogue_state=dialogue_state_before,
+        runtime_context=runtime_context,
+        config=response_accumulation_config,
+        lexicon=lexicon,
+    )
+    if accumulation_debug.get('applied'):
+        chosen_candidate = response.chosen_candidate or RealizationCandidate(
+            text=response.text,
+            token_sequence=response.text.replace('。', ' 。').split(),
+            template_id='accumulation_base',
+            grammar_violations=[],
+            slot_coverage=1.0 if filled_slots.values else 0.0,
+            semantic_score=max(0.40, float(response.score.semantic_consistency)),
+            final_score=float(response.score.total),
+        )
+        accumulated_candidate = RealizationCandidate(
+            text=accumulated_text,
+            token_sequence=accumulated_text.replace('。', ' 。').replace('？', ' ？').split(),
+            template_id=f"{chosen_candidate.template_id}_accumulated",
+            grammar_violations=list(chosen_candidate.grammar_violations),
+            slot_coverage=chosen_candidate.slot_coverage,
+            semantic_score=min(1.0, chosen_candidate.semantic_score + 0.04),
+            final_score=chosen_candidate.final_score,
+        )
+        response.text = accumulated_text
+        response.chosen_candidate = accumulated_candidate
+        if 'response_accumulated' not in response.score.reasons:
+            response.score.reasons.append('response_accumulated')
+        scored_candidates = [accumulated_candidate] + list(scored_candidates)
 
     evaluation: List[object] = []
     reward = build_reward_from_response(response=response, evaluation=evaluation)
@@ -1039,6 +1804,37 @@ def run_pipeline(
         filled_slots=filled_slots,
         response=response,
     )
+    dialogue_state_after.variables['chat_history'] = _history_summary(runtime_context)
+    dialogue_state_after.variables['recent_user_texts'] = list(runtime_context.recent_user_texts()) if runtime_context is not None else []
+    dialogue_state_after.variables['recent_response_texts'] = list(runtime_context.recent_response_texts()) if runtime_context is not None else []
+    dialogue_state_after.variables['session_id'] = session_id
+
+    history_topic = response.used_slots.get('topic') or (filled_slots.values['topic'].value if 'topic' in filled_slots.values else '') or dialogue_state_after.current_topic
+    history_saved_path: Optional[Path] = None
+    if runtime_context is not None and runtime_context.history_enabled:
+        _append_history_item(
+            runtime_context,
+            role='user',
+            text=raw_text,
+            turn_id=turn_id,
+            intent=intent_plan.intent,
+            topic=history_topic,
+            policy=intent_plan.response_policy_hint,
+        )
+        _append_history_item(
+            runtime_context,
+            role='assistant',
+            text=response.text,
+            turn_id=turn_id,
+            intent=response.intent,
+            topic=str(history_topic or ''),
+            policy=response.policy,
+        )
+        dialogue_state_after.variables['chat_history'] = _history_summary(runtime_context)
+        dialogue_state_after.variables['recent_user_texts'] = list(runtime_context.recent_user_texts())
+        dialogue_state_after.variables['recent_response_texts'] = list(runtime_context.recent_response_texts())
+        runtime_context.dialogue_state = deepcopy(dialogue_state_after)
+        history_saved_path = save_chat_runtime_context(runtime_context)
 
     trace = TraceLog(
         session_id=session_id,
@@ -1063,15 +1859,41 @@ def run_pipeline(
         debug={
             "lexicon_path": str(lexicon_path),
             "entry_count": len(lexicon.entries),
-            "raw_text": raw_text,
+            "raw_text": focused_raw_text,
+            "original_raw_text": raw_text,
             "tokens": tokens,
             "tokenization": [dataclass_to_dict(item) for item in tokenization_result.tokenization],
             "unknown_spans": [dataclass_to_dict(item) for item in tokenization_result.unknown_spans],
             "unknown_word_learning": unknown_word_learning,
+            "input_focus": {
+                "reason": focus.reason,
+                "used_segmentation": focus.used_segmentation,
+                "focused_text": focused_raw_text,
+                "has_alternative_question": focus.has_alternative_question,
+                "question_like_segment_count": focus.question_like_segment_count,
+                "segments": [
+                    {
+                        "text": seg.text,
+                        "question_like": seg.question_like,
+                        "alternative_branch": seg.alternative_branch,
+                        "score": seg.score,
+                    }
+                    for seg in focus.segments
+                ],
+            },
             "response_score": dataclass_to_dict(response.score),
             "reward": dataclass_to_dict(reward),
             "slot_trace": dataclass_to_dict(slot_trace),
             "policy_memory_matches": policy_memory_matches,
+            "topic_history_applied": topic_history_applied,
+            "response_accumulation": accumulation_debug,
+            "history": {
+                "enabled": bool(runtime_context.history_enabled) if runtime_context is not None else False,
+                "turn_count": len(runtime_context.history) if runtime_context is not None else 0,
+                "recent_user_texts": list(runtime_context.recent_user_texts()) if runtime_context is not None else [],
+                "recent_response_texts": list(runtime_context.recent_response_texts()) if runtime_context is not None else [],
+                "history_path": str(history_saved_path) if history_saved_path else str(getattr(runtime_context, 'history_path', '') or ''),
+            },
         },
     )
 

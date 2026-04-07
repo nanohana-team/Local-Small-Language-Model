@@ -49,6 +49,8 @@ class IntentPlannerConfig:
     topic_context_confidence_bonus: float = 0.08
     topic_context_confidence_cap: float = 0.98
     confidence_extra_multiplier: float = 0.10
+    alternative_question_confidence_penalty: float = 0.10
+    alternative_question_policy_bonus: float = 0.12
 
 
 class IntentPlanner:
@@ -59,6 +61,7 @@ class IntentPlanner:
     """
 
     QUESTION_MARKERS: Tuple[str, ...] = ("?", "？")
+    ALTERNATIVE_MARKERS: Tuple[str, ...] = ("それとも", "または", "あるいは", "or", "OR")
     QUESTION_WORDS: Tuple[str, ...] = (
         "なに",
         "何",
@@ -513,6 +516,23 @@ class IntentPlanner:
             plan.note = f"{plan.note} | topic_context_available".strip(" |")
             LOGGER.debug(
                 "intent_planner.refine.applied rule=topic_context_available old_confidence=%.4f new_confidence=%.4f",
+                old_confidence,
+                plan.confidence,
+            )
+
+        input_focus = dict(dialogue_state.variables.get("input_focus", {}) or {})
+        if plan.intent == "question" and (
+            bool(input_focus.get("has_alternative_question"))
+            or any(marker in raw_text for marker in self.ALTERNATIVE_MARKERS)
+        ):
+            old_confidence = plan.confidence
+            plan.response_policy_hint = "clarify"
+            plan.confidence = max(0.0, min(1.0, plan.confidence - float(self.config.alternative_question_confidence_penalty) + float(self.config.alternative_question_policy_bonus)))
+            if "topic" not in plan.optional_slots:
+                plan.optional_slots.append("topic")
+            plan.note = f"{plan.note} | alternative_question_detected".strip(" |")
+            LOGGER.debug(
+                "intent_planner.refine.applied rule=alternative_question_detected old_confidence=%.4f new_confidence=%.4f",
                 old_confidence,
                 plan.confidence,
             )

@@ -35,6 +35,8 @@ class BasicScorerConfig:
     diversity_similarity_threshold: float = 0.82
     diversity_frequency_bonus_penalty: float = 0.04
     diversity_frequency_cap: float = 0.24
+    generic_hedge_penalty: float = 0.16
+    clarify_question_bonus: float = 0.18
 
 
 class BasicScorer:
@@ -439,6 +441,14 @@ class BasicScorer:
                 score,
             )
 
+        if any(phrase in text for phrase in ("ことが考えられます", "確認できる範囲では", "話題としてはそこ")):
+            score -= float(self.config.generic_hedge_penalty)
+            LOGGER.debug(
+                "basic_scorer.score_grammar_fitness.sub reason=generic_hedge penalty=%.6f running=%.6f",
+                float(self.config.generic_hedge_penalty),
+                score,
+            )
+
         if filled_slots.frame.predicate and filled_slots.frame.predicate not in text:
             score -= 0.05
             LOGGER.debug(
@@ -611,12 +621,20 @@ class BasicScorer:
                 "basic_scorer.score_policy_fitness.add reason=policy_agree_match add=0.08 running=%.6f",
                 score,
             )
-        elif policy == "clarify" and ("確認" in text or "大丈夫" in text or "合って" in text):
-            score += 0.08
-            LOGGER.debug(
-                "basic_scorer.score_policy_fitness.add reason=policy_clarify_match add=0.08 running=%.6f",
-                score,
-            )
+        elif policy == "clarify":
+            if any(marker in text for marker in ("どちら", "どっち", "先に", "話題が", "答えればいい")):
+                score += float(self.config.clarify_question_bonus)
+                LOGGER.debug(
+                    "basic_scorer.score_policy_fitness.add reason=policy_clarify_match add=%.2f running=%.6f",
+                    float(self.config.clarify_question_bonus),
+                    score,
+                )
+            elif "確認" in text or "大丈夫" in text or "合って" in text:
+                score += 0.08
+                LOGGER.debug(
+                    "basic_scorer.score_policy_fitness.add reason=policy_clarify_match add=0.08 running=%.6f",
+                    score,
+                )
         elif policy == "answer" and text.endswith(("。", "！")):
             score += 0.05
             LOGGER.debug(
@@ -864,4 +882,5 @@ def choose_best_response(
         intent_plan=intent_plan,
         filled_slots=filled_slots,
         candidates=candidates,
+        recent_texts=recent_texts,
     )
