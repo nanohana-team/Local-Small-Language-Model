@@ -95,6 +95,11 @@ def _job_runtime_root(base_runtime_dir: Path, job_index: int) -> Path:
 
 
 
+def _job_logs_root(base_logs_dir: Path, job_index: int) -> Path:
+    return base_logs_dir / f'job_{job_index:04d}'
+
+
+
 def _build_learning_args(args) -> List[str]:
     argv: List[str] = [
         '--lexicon', args.lexicon,
@@ -192,7 +197,9 @@ def _build_job_specs(args, scheduler: ParallelSchedulerConfig) -> tuple[List[Par
 
     stamp = _now_stamp()
     base_runtime_dir = Path('runtime') / 'parallel_learning' / f'{stamp}_{mode}'
+    base_logs_dir = Path('logs') / 'parallel_learning' / f'{stamp}_{mode}'
     base_runtime_dir.mkdir(parents=True, exist_ok=True)
+    base_logs_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == 'learn':
         base_argv = _build_learning_args(args)
@@ -206,7 +213,7 @@ def _build_job_specs(args, scheduler: ParallelSchedulerConfig) -> tuple[List[Par
     episode_offset = 0
     for job_index, job_episodes in enumerate(episode_splits, start=1):
         job_root = _job_runtime_root(base_runtime_dir, job_index)
-        logs_dir = job_root / 'logs'
+        logs_dir = _job_logs_root(base_logs_dir, job_index)
         traces_dir = job_root / 'traces'
         datasets_dir = job_root / 'datasets'
         policy_memory_path = job_root / 'policy_memory.json'

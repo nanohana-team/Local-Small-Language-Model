@@ -51,6 +51,8 @@ pipeline:
     fallback_confidence: 0.46
     use_dialogue_topic_fallback: true
     use_recall_topic_fallback: true
+    recall_topic_min_score: 0.26
+    allow_axis_only_topic_fallback: false
 
   surface_realizer:
     default_style: neutral
@@ -98,6 +100,9 @@ pipeline:
     diversity_frequency_cap: 0.24
     generic_hedge_penalty: 0.16
     clarify_question_bonus: 0.18
+    low_retention_threshold: 0.34
+    low_retention_penalty: 0.18
+    weak_topic_fallback_penalty: 0.10
 
   response_accumulation:
     enabled: true

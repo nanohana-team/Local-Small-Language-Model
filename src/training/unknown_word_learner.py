@@ -626,7 +626,15 @@ class UnknownWordLearner:
             end = candidate.rfind('}')
             if start >= 0 and end > start:
                 candidate = candidate[start:end + 1]
-        parsed = json.loads(candidate)
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            start = candidate.find('{')
+            if start < 0:
+                raise
+            parsed, end_index = decoder.raw_decode(candidate[start:])
+            candidate = candidate[start:start + end_index]
         if not isinstance(parsed, dict):
             raise ValueError('LLM response JSON must be an object')
         return parsed

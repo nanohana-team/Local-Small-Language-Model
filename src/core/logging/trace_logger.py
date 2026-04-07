@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
@@ -49,7 +49,25 @@ def _to_jsonable(value: Any) -> Any:
             value = value.replace(tzinfo=JST)
         return value.isoformat(timespec="seconds")
 
-    return value
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        data = bytes(value)
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return {
+                "__type__": "bytes",
+                "encoding": "hex",
+                "data": data.hex(),
+                "length": len(data),
+            }
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    return repr(value)
 
 
 class JsonlTraceLogger:

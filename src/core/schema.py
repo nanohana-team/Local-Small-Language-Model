@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import datetime
+from datetime import date, datetime, time
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from zoneinfo import ZoneInfo
 
@@ -662,14 +663,37 @@ class TraceLog:
 
 def dataclass_to_dict(value: Any) -> Any:
     if is_dataclass(value):
-        return asdict(value)
+        return dataclass_to_dict(asdict(value))
     if isinstance(value, dict):
-        return {k: dataclass_to_dict(v) for k, v in value.items()}
+        return {str(k): dataclass_to_dict(v) for k, v in value.items()}
     if isinstance(value, list):
         return [dataclass_to_dict(v) for v in value]
     if isinstance(value, tuple):
         return [dataclass_to_dict(v) for v in value]
-    return value
+    if isinstance(value, set):
+        return [dataclass_to_dict(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=JST)
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        data = bytes(value)
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            return {
+                '__type__': 'bytes',
+                'encoding': 'hex',
+                'data': data.hex(),
+                'length': len(data),
+            }
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
 
 
 def build_input_state(

@@ -16,5 +16,6 @@ llm-api-order:
   - "local:OpenPipe/Qwen3-14B-Instruct"
 
 llm-api-higher-order:
-  - gemini-3.1-pro
+  - gemini-3-flash-preview
+  - gemini-2.5-flash
   - gpt-5.4

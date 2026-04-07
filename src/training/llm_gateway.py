@@ -33,7 +33,7 @@ class LLMGateway:
         self.config_path = Path(config_path)
         if self.env_path.exists():
             load_dotenv(self.env_path)
-        self.model_order = self._load_model_order(self.config_path)
+        self.model_order, self.higher_model_order = self._load_model_orders(self.config_path)
         self._gemini_client = None
         self._openai_client = None
         self._local_client = None
@@ -48,7 +48,10 @@ class LLMGateway:
         temperature: float = 0.2,
         max_output_tokens: int = 512,
     ) -> LLMResponse:
-        model_candidates = [str(x) for x in (preferred_models or self.model_order) if str(x).strip()]
+        model_candidates = self._resolve_model_candidates(
+            purpose=purpose,
+            preferred_models=preferred_models,
+        )
         if not model_candidates:
             raise RuntimeError('No model candidates are configured for LLMGateway.')
 
@@ -98,12 +101,52 @@ class LLMGateway:
 
         raise RuntimeError('All configured LLM backends failed: ' + ' | '.join(errors))
 
-    def _load_model_order(self, config_path: Path) -> list[str]:
+    def _load_model_orders(self, config_path: Path) -> tuple[list[str], list[str]]:
         if not config_path.exists():
-            return []
+            return [], []
         data = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}
         order = data.get('llm-api-order', [])
-        return [str(x).strip() for x in order if str(x).strip()]
+        higher_order = data.get('llm-api-higher-order', [])
+        return (
+            [str(x).strip() for x in order if str(x).strip()],
+            [str(x).strip() for x in higher_order if str(x).strip()],
+        )
+
+    def _resolve_model_candidates(
+        self,
+        *,
+        purpose: str,
+        preferred_models: Optional[Iterable[str]] = None,
+    ) -> list[str]:
+        preferred = [str(x).strip() for x in (preferred_models or []) if str(x).strip()]
+        if preferred:
+            return preferred
+
+        if self._purpose_requires_higher_order(purpose):
+            return self._merge_model_orders(self.higher_model_order, self.model_order)
+        return list(self.model_order)
+
+    def _purpose_requires_higher_order(self, purpose: str) -> bool:
+        normalized = str(purpose or '').strip().lower()
+        if not normalized or not self.higher_model_order:
+            return False
+        return normalized in {
+            'unknown_word_entry_relearn',
+            'target_generation',
+            'external_evaluation',
+        }
+
+    def _merge_model_orders(self, *orders: Iterable[str]) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for order in orders:
+            for model_name in order:
+                normalized = str(model_name).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                merged.append(normalized)
+        return merged
 
     def _detect_provider(self, model_name: str) -> str:
         normalized = str(model_name).strip()

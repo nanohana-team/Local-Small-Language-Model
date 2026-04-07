@@ -37,6 +37,9 @@ class BasicScorerConfig:
     diversity_frequency_cap: float = 0.24
     generic_hedge_penalty: float = 0.16
     clarify_question_bonus: float = 0.18
+    low_retention_threshold: float = 0.34
+    low_retention_penalty: float = 0.18
+    weak_topic_fallback_penalty: float = 0.10
 
 
 class BasicScorer:
@@ -205,8 +208,18 @@ class BasicScorer:
         diversity_penalty = self._score_diversity_penalty(candidate, recent_texts)
         total -= diversity_penalty
 
+        low_retention_penalty = 0.0
+        if input_retention < float(self.config.low_retention_threshold):
+            low_retention_penalty = float(self.config.low_retention_penalty)
+            total -= low_retention_penalty
+
+        weak_topic_penalty = 0.0
+        if self._uses_weak_topic_slot(candidate, filled_slots) and input_retention < float(self.config.low_retention_threshold):
+            weak_topic_penalty = float(self.config.weak_topic_fallback_penalty)
+            total -= weak_topic_penalty
+
         LOGGER.debug(
-            "basic_scorer.score_candidate.weighted text=%s weighted_semantic=%.6f weighted_slot=%.6f weighted_grammar=%.6f weighted_retention=%.6f weighted_policy=%.6f diversity_penalty=%.6f total_before_clamp=%.6f",
+            "basic_scorer.score_candidate.weighted text=%s weighted_semantic=%.6f weighted_slot=%.6f weighted_grammar=%.6f weighted_retention=%.6f weighted_policy=%.6f diversity_penalty=%.6f low_retention_penalty=%.6f weak_topic_penalty=%.6f total_before_clamp=%.6f",
             candidate.text,
             weighted_semantic,
             weighted_slot,
@@ -214,6 +227,8 @@ class BasicScorer:
             weighted_retention,
             weighted_policy,
             diversity_penalty,
+            low_retention_penalty,
+            weak_topic_penalty,
             total,
         )
 
@@ -226,19 +241,11 @@ class BasicScorer:
             input_retention=input_retention,
             policy_fitness=policy_fitness,
             diversity_penalty=diversity_penalty,
+            low_retention_penalty=low_retention_penalty,
+            weak_topic_penalty=weak_topic_penalty,
         )
 
         clamped_total = max(0.0, min(1.0, total))
-
-        breakdown = ScoreBreakdown(
-            semantic_consistency=semantic_consistency,
-            slot_fitness=slot_fitness,
-            grammar_fitness=grammar_fitness,
-            input_retention=input_retention,
-            policy_fitness=policy_fitness,
-            total=clamped_total,
-            reasons=reasons,
-        )
 
         scored_candidate = RealizationCandidate(
             text=candidate.text,
@@ -248,9 +255,16 @@ class BasicScorer:
             slot_coverage=candidate.slot_coverage,
             semantic_score=candidate.semantic_score,
             final_score=clamped_total,
-            score_breakdown=breakdown,
-            internal_reward_estimate=clamped_total,
-            selection_metadata=dict(getattr(candidate, 'selection_metadata', {}) or {}),
+        )
+
+        breakdown = ScoreBreakdown(
+            semantic_consistency=semantic_consistency,
+            slot_fitness=slot_fitness,
+            grammar_fitness=grammar_fitness,
+            input_retention=input_retention,
+            policy_fitness=policy_fitness,
+            total=clamped_total,
+            reasons=reasons,
         )
 
         LOGGER.debug(
@@ -706,6 +720,20 @@ class BasicScorer:
         )
         return final_penalty
 
+
+    def _uses_weak_topic_slot(
+        self,
+        candidate: RealizationCandidate,
+        filled_slots: FilledSlots,
+    ) -> bool:
+        topic_value = filled_slots.values.get('topic')
+        if topic_value is None:
+            return False
+        note = str(topic_value.note or '')
+        if note not in {'topic_fallback_from_recall', 'topic_from_dialogue_state'}:
+            return False
+        return bool(topic_value.value and topic_value.value in candidate.text)
+
     def _normalize_text(self, text: str) -> str:
         return str(text or '').strip().rstrip('。？！!?')
 
@@ -735,6 +763,8 @@ class BasicScorer:
         input_retention: float,
         policy_fitness: float,
         diversity_penalty: float = 0.0,
+        low_retention_penalty: float = 0.0,
+        weak_topic_penalty: float = 0.0,
     ) -> List[str]:
         reasons: List[str] = []
         LOGGER.debug(
@@ -764,8 +794,13 @@ class BasicScorer:
 
         if input_retention >= 0.60:
             reasons.append("input_retention_good")
-        elif input_retention < 0.25:
+        elif input_retention < float(self.config.low_retention_threshold):
             reasons.append("input_retention_low")
+
+        if low_retention_penalty > 0.0:
+            reasons.append("low_retention_penalty_applied")
+        if weak_topic_penalty > 0.0:
+            reasons.append("weak_topic_fallback_penalty_applied")
 
         if policy_fitness >= 0.75:
             reasons.append("policy_fit_good")

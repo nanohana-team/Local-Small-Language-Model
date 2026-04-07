@@ -91,8 +91,9 @@ class JsonlDatasetWriter:
         self.latest_path = self.dataset_dir / latest_name
 
     def append(self, record: Mapping[str, Any]) -> Path:
+        payload = dataclass_to_dict(dict(record))
         with self.latest_path.open('a', encoding='utf-8') as f:
-            f.write(json.dumps(dict(record), ensure_ascii=False, separators=(',', ':')))
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
             f.write('\n')
         return self.latest_path
 

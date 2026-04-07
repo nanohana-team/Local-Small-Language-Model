@@ -27,6 +27,8 @@ class SlotFillerConfig:
     fallback_confidence: float = 0.46
     use_dialogue_topic_fallback: bool = True
     use_recall_topic_fallback: bool = True
+    recall_topic_min_score: float = 0.26
+    allow_axis_only_topic_fallback: bool = False
 
 
 class SlotFiller:
@@ -728,6 +730,7 @@ class SlotFiller:
 
         if intent_plan.intent in {"question", "explain", "confirm", "respond"} and "topic" not in values:
             topic = self._find_best_nominal_topic(tokens=tokens, lexicon=lexicon, exclude_values=values)
+            topic_from_recall = False
             LOGGER.debug("slot_filler.topic_fallback.from_tokens result=%s", topic)
 
             if not topic and self.config.use_recall_topic_fallback:
@@ -736,9 +739,11 @@ class SlotFiller:
                     lexicon=lexicon,
                     exclude_values=values,
                 )
+                topic_from_recall = bool(topic)
                 LOGGER.debug("slot_filler.topic_fallback.from_recall result=%s", topic)
 
             if topic:
+                topic_note = "topic_fallback_from_recall" if topic_from_recall else "topic_fallback_from_tokens"
                 self._set_slot_if_better(
                     values=values,
                     slot_name="topic",
@@ -746,7 +751,7 @@ class SlotFiller:
                     confidence=self.config.inferred_confidence,
                     source_candidate=topic,
                     inferred=True,
-                    note="topic_fallback",
+                    note=topic_note,
                 )
 
         if intent_plan.intent == "empathy" and "state" not in values:
@@ -1039,6 +1044,20 @@ class SlotFiller:
                 entry.grammar.pos if entry else None,
             )
             if entry is None:
+                continue
+            if candidate.score < float(self.config.recall_topic_min_score):
+                LOGGER.debug(
+                    "slot_filler.find_topic_from_recall.skip word=%s reason=low_score score=%.6f threshold=%.6f",
+                    candidate.word,
+                    candidate.score,
+                    float(self.config.recall_topic_min_score),
+                )
+                continue
+            if not self.config.allow_axis_only_topic_fallback and candidate.source == 'axis':
+                LOGGER.debug(
+                    "slot_filler.find_topic_from_recall.skip word=%s reason=axis_only_candidate",
+                    candidate.word,
+                )
                 continue
             if self._is_nominal(entry):
                 if candidate.word in self.BAD_TOPIC_WORDS or candidate.word in self.TIME_WORDS:

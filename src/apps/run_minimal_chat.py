@@ -278,7 +278,7 @@ def save_chat_runtime_context(context: ChatRuntimeContext) -> Optional[Path]:
         'dialogue_state': dataclass_to_dict(context.dialogue_state),
         'history': [dataclass_to_dict(item) for item in context.history],
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    path.write_text(json.dumps(dataclass_to_dict(payload), ensure_ascii=False, indent=2), encoding='utf-8')
     return path
 
 
@@ -1217,6 +1217,175 @@ def build_reward_from_response(response, evaluation: Optional[List[object]] = No
     )
 
 
+def build_decision_trace(
+    *,
+    scored_candidates: Sequence[RealizationCandidate],
+    response,
+    filled_slots,
+    recall_result,
+    reward: RewardBreakdown,
+    evaluation: Optional[Sequence[object]] = None,
+    selection_source: str = "scorer",
+    selected_index: int = -1,
+    selection_metadata: Optional[Dict[str, Any]] = None,
+) -> DecisionTrace:
+    evaluation = list(evaluation or [])
+    selection_metadata = dict(selection_metadata or {})
+
+    candidate_list = list(scored_candidates or [])
+    if not candidate_list and getattr(response, "chosen_candidate", None) is not None:
+        candidate_list = [response.chosen_candidate]
+        if selected_index < 0:
+            selected_index = 0
+
+    if not candidate_list:
+        return DecisionTrace(
+            selection_source=selection_source,
+            selected_index=-1,
+            selected_text=str(getattr(response, "text", "") or ""),
+            selected_template_id=str(getattr(getattr(response, "chosen_candidate", None), "template_id", "") or ""),
+            selected_score=float(getattr(getattr(response, "score", None), "total", 0.0) or 0.0),
+            selected_reward_total=float(getattr(reward, "total", 0.0) or 0.0),
+            selected_reward_internal=float(getattr(getattr(reward, "internal", None), "total", 0.0) or 0.0),
+            selected_reward_external=float(getattr(getattr(reward, "external", None), "total", 0.0) or 0.0),
+            selection_reason_codes=["no_candidates"],
+            metadata={
+                **selection_metadata,
+                "evaluation_count": len(evaluation),
+            },
+        )
+
+    ranking = sorted(
+        enumerate(candidate_list),
+        key=lambda item: float(getattr(item[1], "final_score", 0.0) or 0.0),
+        reverse=True,
+    )
+    rank_map = {original_index: rank for rank, (original_index, _) in enumerate(ranking, start=1)}
+    best_score = float(getattr(ranking[0][1], "final_score", 0.0) or 0.0)
+
+    matched_index = -1
+    if 0 <= int(selected_index) < len(candidate_list):
+        matched_index = int(selected_index)
+    else:
+        chosen_candidate = getattr(response, "chosen_candidate", None)
+        chosen_text = str(getattr(chosen_candidate, "text", "") or getattr(response, "text", "") or "")
+        chosen_template_id = str(getattr(chosen_candidate, "template_id", "") or "")
+        for idx, candidate in enumerate(candidate_list):
+            if chosen_template_id and str(getattr(candidate, "template_id", "") or "") == chosen_template_id:
+                matched_index = idx
+                break
+            if chosen_text and str(getattr(candidate, "text", "") or "") == chosen_text:
+                matched_index = idx
+                break
+        if matched_index < 0:
+            matched_index = 0
+
+    selected_candidate = candidate_list[matched_index]
+    second_best_score = float(getattr(ranking[1][1], "final_score", 0.0) or 0.0) if len(ranking) >= 2 else best_score
+
+    compared_candidates: List[DecisionCandidateTrace] = []
+    for idx, candidate in enumerate(candidate_list):
+        candidate_score = float(getattr(candidate, "final_score", 0.0) or 0.0)
+        score_breakdown = getattr(candidate, "score_breakdown", None) or ScoreBreakdown(total=candidate_score)
+        rejected_reason_codes = []
+        if idx != matched_index:
+            rejected_reason_codes.append("not_selected")
+        grammar_violations = list(getattr(candidate, "grammar_violations", []) or [])
+        rejected_reason_codes.extend(f"grammar:{item}" for item in grammar_violations)
+        selection_meta = dict(getattr(candidate, "selection_metadata", {}) or {})
+        compared_candidates.append(
+            DecisionCandidateTrace(
+                index=idx,
+                rank=int(rank_map.get(idx, len(candidate_list))),
+                text=str(getattr(candidate, "text", "") or ""),
+                template_id=str(getattr(candidate, "template_id", "") or ""),
+                final_score=candidate_score,
+                score_breakdown=score_breakdown,
+                internal_reward_estimate=float(getattr(candidate, "internal_reward_estimate", candidate_score) or 0.0),
+                selected=idx == matched_index,
+                rejected_reason_codes=rejected_reason_codes,
+                score_gap_from_best=max(0.0, best_score - candidate_score),
+                metadata=selection_meta,
+            )
+        )
+
+    selected_slot_evidence: Dict[str, Dict[str, Any]] = {}
+    for slot_name, slot_value in getattr(filled_slots, "values", {}).items():
+        value_text = str(getattr(slot_value, "value", "") or "")
+        in_selected_text = bool(value_text) and value_text in str(getattr(selected_candidate, "text", "") or "")
+        selected_slot_evidence[str(slot_name)] = {
+            "value": value_text,
+            "confidence": float(getattr(slot_value, "confidence", 0.0) or 0.0),
+            "source_candidate": str(getattr(slot_value, "source_candidate", "") or ""),
+            "inferred": bool(getattr(slot_value, "inferred", False)),
+            "note": str(getattr(slot_value, "note", "") or ""),
+            "used_in_selected_text": in_selected_text,
+        }
+
+    relation_map: Dict[str, List[List[str]]] = {}
+    for item in list(getattr(recall_result, "candidates", []) or []):
+        word = str(getattr(item, "word", "") or "")
+        path = list(getattr(item, "relation_path", []) or [])
+        if not word or not path:
+            continue
+        relation_map.setdefault(word, []).append(path)
+
+    selected_relation_paths: List[List[str]] = []
+    seen_paths: set[tuple[str, ...]] = set()
+    selected_text = str(getattr(selected_candidate, "text", "") or "")
+    response_slot_values = [str(value) for value in dict(getattr(response, "used_slots", {}) or {}).values() if str(value).strip()]
+    probe_words = set(response_slot_values)
+    for slot_name, slot_value in getattr(filled_slots, "values", {}).items():
+        probe_words.add(str(getattr(slot_value, "value", "") or ""))
+    for word in probe_words:
+        if not word:
+            continue
+        if word not in selected_text and word not in response_slot_values:
+            continue
+        for path in relation_map.get(word, []):
+            path_key = tuple(path)
+            if path_key in seen_paths:
+                continue
+            seen_paths.add(path_key)
+            selected_relation_paths.append(path)
+
+    reason_codes = list(getattr(getattr(response, "score", None), "reasons", []) or [])
+    if selection_source:
+        reason_codes.append(f"selection_source:{selection_source}")
+    if matched_index == ranking[0][0]:
+        reason_codes.append("selected_top_scoring_candidate")
+    if matched_index != ranking[0][0]:
+        reason_codes.append("selected_non_top_candidate")
+    if getattr(response, "used_slots", None):
+        reason_codes.append("selected_candidate_uses_slots")
+    if selected_relation_paths:
+        reason_codes.append("selected_candidate_has_relation_paths")
+    deduped_reason_codes = list(dict.fromkeys(str(code) for code in reason_codes if str(code).strip()))
+
+    return DecisionTrace(
+        selection_source=selection_source,
+        selected_index=matched_index,
+        selected_text=str(getattr(selected_candidate, "text", "") or getattr(response, "text", "") or ""),
+        selected_template_id=str(getattr(selected_candidate, "template_id", "") or ""),
+        selected_score=float(getattr(selected_candidate, "final_score", 0.0) or 0.0),
+        selected_reward_total=float(getattr(reward, "total", 0.0) or 0.0),
+        selected_reward_internal=float(getattr(getattr(reward, "internal", None), "total", 0.0) or 0.0),
+        selected_reward_external=float(getattr(getattr(reward, "external", None), "total", 0.0) or 0.0),
+        margin_vs_second=max(0.0, best_score - second_best_score),
+        compared_candidates=compared_candidates,
+        selected_slot_evidence=selected_slot_evidence,
+        selected_relation_paths=selected_relation_paths,
+        selection_reason_codes=deduped_reason_codes,
+        metadata={
+            **selection_metadata,
+            "candidate_count": len(candidate_list),
+            "best_candidate_index": int(ranking[0][0]),
+            "best_candidate_score": best_score,
+            "evaluation_count": len(evaluation),
+        },
+    )
+
+
 def build_episode_actions(
     intent_plan,
     recall_result,
@@ -1474,16 +1643,12 @@ def build_episode_actions(
                 source="surface_realizer",
                 kept=kept,
                 dropped=not kept,
-                drop_reason="lower_total_score" if not kept else "",
+                drop_reason="not_selected" if not kept else "",
                 metadata={
                     "template_id": item.template_id,
                     "slot_coverage": float(item.slot_coverage),
                     "semantic_score": float(item.semantic_score),
                     "grammar_violations": list(item.grammar_violations),
-                    "score_breakdown": dataclass_to_dict(getattr(item, "score_breakdown", ScoreBreakdown())),
-                    "internal_reward_estimate": float(getattr(item, "internal_reward_estimate", 0.0) or 0.0),
-                    "selection_reasons": list(getattr(getattr(item, "score_breakdown", None), "reasons", []) or []),
-                    "score_gap_from_selected": max(0.0, float(response.score.total) - float(item.final_score)),
                 },
             )
         )
@@ -1515,148 +1680,27 @@ def build_episode_actions(
 
     return actions
 
-
-def _extract_selected_relation_paths(recall_result, response) -> List[List[str]]:
-    selected_tokens = {str(token).strip() for token in getattr(getattr(response, 'chosen_candidate', None), 'token_sequence', []) if str(token).strip()}
-    if not selected_tokens:
-        selected_tokens = {str(word).strip() for word in getattr(response, 'used_slots', {}).values() if str(word).strip()}
-    paths: List[List[str]] = []
-    seen: set[tuple[str, ...]] = set()
-    for candidate in getattr(recall_result, 'candidates', []) or []:
-        word = str(getattr(candidate, 'word', '') or '').strip()
-        relation_path = [str(item) for item in getattr(candidate, 'relation_path', []) if str(item).strip()]
-        if not relation_path:
-            continue
-        if selected_tokens and word and word not in selected_tokens and word not in str(getattr(response, 'text', '') or ''):
-            continue
-        path_key = tuple(relation_path)
-        if path_key in seen:
-            continue
-        seen.add(path_key)
-        paths.append(relation_path)
-    return paths[:8]
+def _slot_value_for_state_update(filled_slots, slot_name: str):
+    return filled_slots.values.get(slot_name)
 
 
-def _build_selected_slot_evidence(filled_slots, response) -> Dict[str, Dict[str, Any]]:
-    evidence: Dict[str, Dict[str, Any]] = {}
-    used_slots = dict(getattr(response, 'used_slots', {}) or {})
-    for slot_name, slot_value in getattr(filled_slots, 'values', {}).items():
-        if used_slots and slot_name not in used_slots:
-            continue
-        evidence[str(slot_name)] = {
-            'value': str(slot_value.value),
-            'confidence': float(slot_value.confidence),
-            'source_candidate': str(slot_value.source_candidate),
-            'inferred': bool(slot_value.inferred),
-            'note': str(slot_value.note),
-        }
-    return evidence
-
-
-def build_decision_trace(
-    *,
-    scored_candidates: Sequence[RealizationCandidate],
-    response: ResponseResult,
-    filled_slots,
-    recall_result,
-    reward: RewardBreakdown,
-    evaluation: Sequence[Any] | None = None,
-    selection_source: str = 'scorer',
-    selected_index: Optional[int] = None,
-    selection_metadata: Optional[Dict[str, Any]] = None,
-) -> DecisionTrace:
-    candidate_list = list(scored_candidates or [])
-    if not candidate_list:
-        return DecisionTrace(
-            selection_source=str(selection_source or 'scorer'),
-            selected_text=str(response.text or ''),
-            selected_template_id=str(getattr(getattr(response, 'chosen_candidate', None), 'template_id', '') or ''),
-            selected_score=float(getattr(response.score, 'total', 0.0) or 0.0),
-            selected_reward_total=float(getattr(reward, 'total', 0.0) or 0.0),
-            selected_reward_internal=float(getattr(getattr(reward, 'internal', None), 'total', 0.0) or 0.0),
-            selected_reward_external=float(getattr(getattr(reward, 'external', None), 'total', 0.0) or 0.0),
-            selection_reason_codes=['no_candidates'],
-            metadata=dict(selection_metadata or {}),
-        )
-
-    ranked_indices = sorted(range(len(candidate_list)), key=lambda idx: float(candidate_list[idx].final_score), reverse=True)
-    ranked_position = {candidate_index: rank for rank, candidate_index in enumerate(ranked_indices, start=1)}
-    if selected_index is None:
-        for idx, item in enumerate(candidate_list):
-            if item.text == str(response.text or '') and item.template_id == str(getattr(getattr(response, 'chosen_candidate', None), 'template_id', item.template_id) or item.template_id):
-                selected_index = idx
-                break
-    if selected_index is None:
-        for idx, item in enumerate(candidate_list):
-            if item.text == str(response.text or ''):
-                selected_index = idx
-                break
-    if selected_index is None:
-        selected_index = ranked_indices[0]
-
-    best_score = float(candidate_list[ranked_indices[0]].final_score or 0.0)
-    second_score = float(candidate_list[ranked_indices[1]].final_score or 0.0) if len(ranked_indices) >= 2 else 0.0
-    compared_candidates: List[DecisionCandidateTrace] = []
-    for idx in ranked_indices:
-        item = candidate_list[idx]
-        selected = idx == selected_index
-        score_gap = max(0.0, best_score - float(item.final_score or 0.0))
-        rejected_reason_codes: List[str] = [] if selected else ['lower_total_score']
-        if not selected and score_gap > 0.0:
-            rejected_reason_codes.append(f'score_gap:{score_gap:.6f}')
-        reasons = list(getattr(getattr(item, 'score_breakdown', None), 'reasons', []) or [])
-        if not selected:
-            rejected_reason_codes.extend(reasons[:6])
-        compared_candidates.append(
-            DecisionCandidateTrace(
-                index=int(idx),
-                rank=int(ranked_position[idx]),
-                text=str(item.text or ''),
-                template_id=str(item.template_id or ''),
-                final_score=float(item.final_score or 0.0),
-                score_breakdown=getattr(item, 'score_breakdown', ScoreBreakdown()),
-                internal_reward_estimate=float(getattr(item, 'internal_reward_estimate', 0.0) or 0.0),
-                selected=selected,
-                rejected_reason_codes=rejected_reason_codes,
-                score_gap_from_best=score_gap,
-                metadata=dict(getattr(item, 'selection_metadata', {}) or {}),
-            )
-        )
-
-    selected_candidate = candidate_list[selected_index]
-    selection_reason_codes = list(getattr(getattr(selected_candidate, 'score_breakdown', None), 'reasons', []) or [])
-    if selection_source == 'action_bandit':
-        selection_reason_codes.insert(0, 'selection_overridden_by_action_bandit')
-    elif selection_source == 'teacher_override':
-        selection_reason_codes.insert(0, 'selection_overridden_by_teacher')
-    else:
-        selection_reason_codes.insert(0, 'highest_total_score')
-    if len(ranked_indices) >= 2:
-        selection_reason_codes.append(f'margin_vs_second:{max(0.0, best_score - second_score):.6f}')
-
-    evaluator_scores = [float(getattr(item, 'score', 0.0) or 0.0) for item in (evaluation or [])]
-    metadata = dict(selection_metadata or {})
-    metadata.setdefault('candidate_count', len(candidate_list))
-    metadata.setdefault('ranked_indices', ranked_indices)
-    if evaluator_scores:
-        metadata['external_evaluator_scores'] = evaluator_scores
-
-    return DecisionTrace(
-        selection_source=str(selection_source or 'scorer'),
-        selected_index=int(selected_index),
-        selected_text=str(selected_candidate.text or ''),
-        selected_template_id=str(selected_candidate.template_id or ''),
-        selected_score=float(selected_candidate.final_score or 0.0),
-        selected_reward_total=float(getattr(reward, 'total', 0.0) or 0.0),
-        selected_reward_internal=float(getattr(getattr(reward, 'internal', None), 'total', 0.0) or 0.0),
-        selected_reward_external=float(getattr(getattr(reward, 'external', None), 'total', 0.0) or 0.0),
-        margin_vs_second=max(0.0, best_score - second_score),
-        compared_candidates=compared_candidates,
-        selected_slot_evidence=_build_selected_slot_evidence(filled_slots, response),
-        selected_relation_paths=_extract_selected_relation_paths(recall_result, response),
-        selection_reason_codes=selection_reason_codes,
-        metadata=metadata,
-    )
+def _state_update_guard(response, filled_slots) -> dict[str, object]:
+    retention = float(getattr(getattr(response, 'score', None), 'input_retention', 0.0) or 0.0)
+    total = float(getattr(getattr(response, 'score', None), 'total', 0.0) or 0.0)
+    topic_value = _slot_value_for_state_update(filled_slots, 'topic')
+    topic_note = str(topic_value.note or '') if topic_value is not None else ''
+    topic_confidence = float(topic_value.confidence) if topic_value is not None else 0.0
+    weak_topic = topic_note in {'topic_fallback_from_recall', 'topic_from_dialogue_state'}
+    return {
+        'retention': retention,
+        'total': total,
+        'allow_subject_object_update': retention >= 0.34 and total >= 0.45,
+        'allow_topic_update': retention >= 0.34 and total >= 0.45 and not weak_topic and topic_confidence >= 0.52,
+        'allow_predicate_topic_fallback': retention >= 0.52 and total >= 0.60,
+        'topic_note': topic_note,
+        'topic_confidence': topic_confidence,
+        'weak_topic': weak_topic,
+    }
 
 
 def build_dialogue_state_after(dialogue_state: DialogueState, intent_plan, filled_slots, response) -> DialogueState:
@@ -1674,18 +1718,21 @@ def build_dialogue_state_after(dialogue_state: DialogueState, intent_plan, fille
         filled_slots.values["topic"].value if "topic" in filled_slots.values else ""
     )
 
-    if actor:
+    guard = _state_update_guard(response, filled_slots)
+
+    if actor and bool(guard['allow_subject_object_update']):
         state_after.last_subject = actor
-    if target:
+    if target and bool(guard['allow_subject_object_update']):
         state_after.last_object = target
-    if topic:
+    if topic and bool(guard['allow_topic_update']):
         state_after.current_topic = topic
-    elif filled_slots.frame.predicate:
+    elif filled_slots.frame.predicate and bool(guard['allow_predicate_topic_fallback']):
         state_after.current_topic = filled_slots.frame.predicate
 
     state_after.variables["last_response_text"] = response.text
     state_after.variables["last_policy"] = response.policy
     state_after.variables["last_intent"] = response.intent
+    state_after.variables["state_update_guard"] = guard
     return state_after
 
 
@@ -2103,17 +2150,6 @@ def run_pipeline(
                 slot_coverage=0.9 if filled_slots.values else 0.7,
                 semantic_score=0.86,
                 final_score=max(0.78, response.score.total),
-                score_breakdown=ScoreBreakdown(
-                    semantic_consistency=max(response.score.semantic_consistency, 0.78),
-                    slot_fitness=max(response.score.slot_fitness, 0.60),
-                    grammar_fitness=max(response.score.grammar_fitness, 0.92),
-                    input_retention=max(response.score.input_retention, 0.52),
-                    policy_fitness=max(response.score.policy_fitness, 0.88),
-                    total=max(0.78, response.score.total),
-                    reasons=list(response.score.reasons),
-                ),
-                internal_reward_estimate=max(0.78, response.score.total),
-                selection_metadata={'source': 'long_context_override'},
             )
             response.text = override_text
             response.chosen_candidate = override_candidate
@@ -2157,17 +2193,6 @@ def run_pipeline(
             slot_coverage=chosen_candidate.slot_coverage,
             semantic_score=min(1.0, chosen_candidate.semantic_score + 0.04),
             final_score=chosen_candidate.final_score,
-            score_breakdown=ScoreBreakdown(
-                semantic_consistency=float(response.score.semantic_consistency),
-                slot_fitness=float(response.score.slot_fitness),
-                grammar_fitness=float(response.score.grammar_fitness),
-                input_retention=float(response.score.input_retention),
-                policy_fitness=float(response.score.policy_fitness),
-                total=float(response.score.total),
-                reasons=list(response.score.reasons),
-            ),
-            internal_reward_estimate=float(response.score.total),
-            selection_metadata={'source': 'response_accumulation'},
         )
         response.text = accumulated_text
         response.chosen_candidate = accumulated_candidate
@@ -2203,20 +2228,6 @@ def run_pipeline(
         source_turn_id=turn_id,
         response_score_total=float(response.score.total),
         unknown_word_learning=unknown_word_learning,
-    )
-    decision_trace = build_decision_trace(
-        scored_candidates=scored_candidates,
-        response=response,
-        filled_slots=filled_slots,
-        recall_result=recall_result,
-        reward=reward,
-        evaluation=evaluation,
-        selection_source='scorer',
-        selection_metadata={
-            'mode': 'chat',
-            'topic_history_applied': bool(topic_history_applied),
-            'policy_memory_match_count': len(policy_memory_matches),
-        },
     )
     dialogue_state_after = build_dialogue_state_after(
         dialogue_state=dialogue_state_before,
@@ -2275,7 +2286,6 @@ def run_pipeline(
         slot_trace=slot_trace,
         response=response,
         reward=reward,
-        decision_trace=decision_trace,
         evaluation=evaluation,
         debug={
             "lexicon_path": str(lexicon_path),
@@ -2307,7 +2317,6 @@ def run_pipeline(
             },
             "response_score": dataclass_to_dict(response.score),
             "reward": dataclass_to_dict(reward),
-            "decision_trace": dataclass_to_dict(decision_trace),
             "slot_trace": dataclass_to_dict(slot_trace),
             "policy_memory_matches": policy_memory_matches,
             "topic_history_applied": topic_history_applied,

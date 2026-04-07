@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -360,7 +361,7 @@ class IntentPlanner:
                     float(self.config.token_keyword_weight),
                     score,
                 )
-            elif keyword and keyword in raw_text:
+            elif self._is_text_keyword_match(rule_intent=rule.intent, keyword=keyword, raw_text=raw_text):
                 score += float(self.config.text_keyword_weight)
                 reasons.append(f"text:{keyword}")
                 LOGGER.debug(
@@ -438,6 +439,23 @@ class IntentPlanner:
             reasons,
         )
         return score, reasons
+
+
+    def _is_text_keyword_match(self, *, rule_intent: str, keyword: str, raw_text: str) -> bool:
+        keyword = str(keyword or '').strip()
+        raw_text = str(raw_text or '')
+        if not keyword or not raw_text:
+            return False
+
+        if rule_intent == 'question':
+            if keyword == 'か':
+                return False
+            if len(keyword) <= 1:
+                return False
+            if keyword in {'どう', 'かな'}:
+                pattern = re.compile(rf'(?:^|[\s　「『（(、。！？?]){re.escape(keyword)}(?:$|[\s　」』）)、。！？?])')
+                return bool(pattern.search(raw_text))
+        return keyword in raw_text
 
     def _build_plan_from_rule(
         self,

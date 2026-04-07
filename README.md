@@ -121,4 +121,4 @@ python -m tools.convert_dict_to_binary tools/dict.json -o libs/dict.lsdx --forma
 
 ## 📄 ライセンス
 
-MIT License
+LICENSE参照

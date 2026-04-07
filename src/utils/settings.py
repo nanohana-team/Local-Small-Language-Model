@@ -18,6 +18,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         'policy_memory': 'runtime/policy_memory.json',
         'action_bandit': 'runtime/action_bandit.json',
     },
+    'llm-api-higher-order': [
+        'gemini-3.1-pro',
+        'gpt-5.4',
+    ],
     'pipeline': {
         'intent_planner': {
             'ask_fact_confidence_base': 0.74,
@@ -53,6 +57,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             'fallback_confidence': 0.46,
             'use_dialogue_topic_fallback': True,
             'use_recall_topic_fallback': True,
+            'recall_topic_min_score': 0.26,
+            'allow_axis_only_topic_fallback': False,
         },
         'surface_realizer': {
             'default_style': 'neutral',
@@ -89,6 +95,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             'policy_memory_response_bonus': 0.08,
             'policy_memory_retention_floor': 0.72,
             'abstract_hedge_penalty': 0.18,
+            'low_retention_threshold': 0.34,
+            'low_retention_penalty': 0.18,
+            'weak_topic_fallback_penalty': 0.10,
         },
     },
     'learning': {
