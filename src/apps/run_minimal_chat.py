@@ -30,7 +30,9 @@ from src.core.schema import (
     ExternalRewardBreakdown,
     ExternalRewardComponent,
     InternalRewardBreakdown,
+    GrammarConstraints,
     LexiconContainer,
+    LexiconEntry,
     RealizationCandidate,
     RewardBreakdown,
     ScoreBreakdown,
@@ -491,6 +493,22 @@ def _build_accumulated_response(
     }
 
 
+BUILTIN_DISCOURSE_ENTRIES: tuple[dict[str, object], ...] = (
+    {"word": "かな", "aliases": ["かなぁ"], "pos": "sentence_ending_particle", "category": "discourse_particle", "can_end": True, "certainty": 0.22, "force": 0.58},
+    {"word": "かも", "aliases": ["かもね"], "pos": "sentence_ending_particle", "category": "discourse_particle", "can_end": True, "certainty": 0.18, "force": 0.52},
+    {"word": "よね", "aliases": ["だよね", "ですよね"], "pos": "sentence_ending_particle", "category": "discourse_particle", "can_end": True, "certainty": 0.42, "force": 0.54},
+    {"word": "ね", "aliases": ["ねぇ"], "pos": "sentence_ending_particle", "category": "discourse_particle", "can_end": True, "certainty": 0.36, "force": 0.48},
+    {"word": "よ", "aliases": [], "pos": "sentence_ending_particle", "category": "discourse_particle", "can_end": True, "certainty": 0.58, "force": 0.62},
+)
+
+EXTERNAL_KNOWLEDGE_TOPICS: dict[str, tuple[str, ...]] = {
+    "weather": ("天気", "気温", "雨", "晴れ", "曇り", "雪", "台風", "傘", "湿度"),
+    "time": ("今何時", "時間", "時刻", "何時", "何日", "日付"),
+    "news": ("ニュース", "速報", "最近", "話題", "最新"),
+    "inventory": ("在庫", "売ってる", "ある", "残ってる"),
+}
+
+
 class SurfaceNormalizer:
     def __init__(self, lexicon: LexiconContainer) -> None:
         self.lexicon = lexicon
@@ -510,7 +528,36 @@ class SurfaceNormalizer:
                 config=self.unknown_word_config,
             )
             self.unknown_word_learner.apply_existing_overlay()
+        self._inject_builtin_discourse_entries()
         self._refresh_indexes()
+
+    def _inject_builtin_discourse_entries(self) -> None:
+        for spec in BUILTIN_DISCOURSE_ENTRIES:
+            word = str(spec.get("word", "") or "").strip()
+            if not word or word in self.lexicon.entries:
+                continue
+            self.lexicon.entries[word] = LexiconEntry(
+                word=word,
+                category=str(spec.get("category", "discourse_particle") or "discourse_particle"),
+                hierarchy=["function_words", "sentence_ending_particles"],
+                vector=AxisVector(
+                    certainty=float(spec.get("certainty", 0.3) or 0.3),
+                    discourse_force=float(spec.get("force", 0.5) or 0.5),
+                    sociality=0.35,
+                    valence=0.50,
+                ),
+                grammar=GrammarConstraints(
+                    pos=str(spec.get("pos", "sentence_ending_particle") or "sentence_ending_particle"),
+                    sub_pos="modality",
+                    can_end=bool(spec.get("can_end", True)),
+                    independent=False,
+                    content_word=False,
+                    function_word=True,
+                ),
+                aliases=[str(alias).strip() for alias in list(spec.get("aliases", []) or []) if str(alias).strip()],
+                style_tags=["discourse", "modality"],
+                meta={"builtin": True, "source": "builtin_discourse_entries"},
+            )
 
     def _refresh_indexes(self) -> None:
         self.surface_map = self._build_surface_map(self.lexicon)
@@ -1033,6 +1080,39 @@ def _segment_summary(text: str, max_len: int = 16) -> str:
     if len(summary) > max_len:
         return summary[:max_len].rstrip() + '…'
     return summary or 'その話'
+
+
+
+
+def detect_external_knowledge_topic(raw_text: str, tokens: Sequence[str]) -> str:
+    joined = f"{str(raw_text or '').strip()} {' '.join(str(token) for token in tokens if str(token).strip())}"
+    for topic, keywords in EXTERNAL_KNOWLEDGE_TOPICS.items():
+        if any(keyword and keyword in joined for keyword in keywords):
+            return topic
+    return ''
+
+
+def build_external_lookup_guidance_candidate(raw_text: str, topic: str) -> RealizationCandidate | None:
+    text = str(raw_text or '').strip()
+    if not text or not topic:
+        return None
+    topic_map = {
+        'weather': '今の天気は内部辞書だけでは確定できないので、外部の天気情報を確認して答えるべき内容です。',
+        'time': '現在時刻や日付は内部辞書だけでは確定できないので、外部の時刻情報を確認して答えるべき内容です。',
+        'news': '最新ニュースは内部辞書だけでは確定できないので、外部情報を確認して答えるべき内容です。',
+        'inventory': '在庫や販売状況は内部辞書だけでは確定できないので、外部情報を確認して答えるべき内容です。',
+    }
+    guidance = topic_map.get(topic, 'この質問は外部情報の確認が必要です。')
+    return RealizationCandidate(
+        text=guidance,
+        token_sequence=guidance.replace('。', ' 。').split(),
+        template_id=f'external_lookup_required_{topic}',
+        grammar_violations=[],
+        slot_coverage=0.88,
+        semantic_score=0.92,
+        final_score=0.0,
+        selection_metadata={'external_lookup_required': True, 'external_topic': topic},
+    )
 
 
 def build_long_context_candidate_text(raw_text: str, focus: InputFocusDecision) -> str:
@@ -2099,6 +2179,12 @@ def run_pipeline(
                 final_score=0.0,
             )
         ] + list(candidates)
+
+    external_topic = detect_external_knowledge_topic(raw_text=focused_raw_text, tokens=tokens)
+    external_lookup_candidate = build_external_lookup_guidance_candidate(raw_text=focused_raw_text, topic=external_topic)
+    if external_lookup_candidate is not None:
+        LOGGER.info('external_lookup.required topic=%s raw_text=%s', external_topic, focused_raw_text)
+        candidates = [external_lookup_candidate] + list(candidates)
 
     policy_memory_matches: List[dict[str, object]] = []
     if not args.no_policy_memory:

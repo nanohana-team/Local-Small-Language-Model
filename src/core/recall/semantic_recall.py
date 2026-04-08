@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from src.core.schema import (
     AxisVector,
@@ -18,6 +18,21 @@ from src.core.schema import (
 
 LOGGER = logging.getLogger(__name__)
 
+DOMAIN_HINT_WORDS: Dict[str, Tuple[str, ...]] = {
+    "weather": (
+        "天気", "気温", "晴れ", "曇り", "雨", "雪", "風", "台風", "傘", "湿度", "暖かい", "涼しい", "暑い", "寒い", "空", "太陽",
+    ),
+    "time": (
+        "今日", "明日", "今", "今夜", "今朝", "昨日", "時間", "予定", "朝", "昼", "夜",
+    ),
+    "news": (
+        "ニュース", "情報", "最近", "今日", "話題", "速報",
+    ),
+    "availability": (
+        "予定", "時間", "空き", "会議", "都合", "予約", "来週", "今週", "明日",
+    ),
+}
+
 
 @dataclass(slots=True)
 class SemanticRecallConfig:
@@ -30,6 +45,13 @@ class SemanticRecallConfig:
     content_seed_weight: float = 1.00
     prefer_content_words_in_axis: bool = True
     axis_probe_limit: int = 512
+    question_axis_probe_limit: int = 96
+    explain_axis_probe_limit: int = 128
+    respond_axis_probe_limit: int = 80
+    relation_limit_per_seed: int = 6
+    enable_domain_hint_boost: bool = True
+    domain_hint_bonus: float = 0.16
+    domain_hint_probe_limit: int = 48
 
 
 class SemanticRecallEngine:
@@ -85,8 +107,23 @@ class SemanticRecallEngine:
             candidates_by_word=candidates_by_word,
         )
 
+        domain_hints = self._detect_domain_hints(
+            seeds=seeds,
+            input_state=input_state,
+            lexicon=lexicon,
+            dialogue_state=dialogue_state,
+        )
+        LOGGER.debug("semantic_recall.domain_hints=%s", sorted(domain_hints))
+
         self._add_relation_candidates(
             seeds=seeds,
+            lexicon=lexicon,
+            candidates_by_word=candidates_by_word,
+            domain_hints=domain_hints,
+        )
+
+        self._add_domain_hint_candidates(
+            domain_hints=domain_hints,
             lexicon=lexicon,
             candidates_by_word=candidates_by_word,
         )
@@ -97,6 +134,7 @@ class SemanticRecallEngine:
             dialogue_state=dialogue_state,
             intent_plan=intent_plan,
             candidates_by_word=candidates_by_word,
+            domain_hints=domain_hints,
         )
 
         ranked = sorted(
@@ -226,6 +264,7 @@ class SemanticRecallEngine:
         seeds: Sequence[str],
         lexicon: LexiconContainer,
         candidates_by_word: Dict[str, RecallCandidate],
+        domain_hints: Set[str],
     ) -> None:
         if self.config.max_relation_hops <= 0:
             LOGGER.debug("semantic_recall.add_relation_candidates.skip reason=max_relation_hops<=0")
@@ -292,7 +331,17 @@ class SemanticRecallEngine:
                     )
                     continue
 
-                for edge in current_entry.relations:
+                relation_edges = list(current_entry.relations)
+                if self.config.relation_limit_per_seed > 0 and len(relation_edges) > self.config.relation_limit_per_seed:
+                    relation_edges = relation_edges[: self.config.relation_limit_per_seed]
+                    LOGGER.debug(
+                        "semantic_recall.relation_truncate seed=%s current_word=%s kept=%s",
+                        seed,
+                        current_word,
+                        len(relation_edges),
+                    )
+
+                for edge in relation_edges:
                     target = str(edge.target).strip()
 
                     LOGGER.debug(
@@ -329,26 +378,28 @@ class SemanticRecallEngine:
                     visited.add(target)
 
                     edge_weight = max(0.05, float(edge.weight))
+                    domain_bonus = self._domain_bonus_for_word(target=target, domain_hints=domain_hints)
                     score = (
                         self.config.input_weight
                         * self.config.relation_weight_scale
                         * cumulative_weight
                         * edge_weight
                         / float(depth + 1)
-                    )
+                    ) + domain_bonus
 
                     target_entry = lexicon.entries[target]
                     grammar_ok = self._is_grammar_ok(target_entry)
                     relation_path = path + [f"{edge.relation}:{target}"]
 
                     LOGGER.debug(
-                        "semantic_recall.relation_candidate target=%s source_seed=%s depth=%s edge_weight=%.6f cumulative_weight=%.6f score=%.6f grammar_ok=%s relation_path=%s",
+                        "semantic_recall.relation_candidate target=%s source_seed=%s depth=%s edge_weight=%.6f cumulative_weight=%.6f score=%.6f domain_bonus=%.6f grammar_ok=%s relation_path=%s",
                         target,
                         seed,
                         depth + 1,
                         edge_weight,
                         cumulative_weight,
                         score,
+                        domain_bonus,
                         grammar_ok,
                         relation_path,
                     )
@@ -389,6 +440,7 @@ class SemanticRecallEngine:
         dialogue_state: DialogueState,
         intent_plan: IntentPlan,
         candidates_by_word: Dict[str, RecallCandidate],
+        domain_hints: Set[str],
     ) -> None:
         target_vector = self._build_target_vector(
             seeds=seeds,
@@ -408,6 +460,9 @@ class SemanticRecallEngine:
         probe_words = self._build_axis_probe_words(
             lexicon=lexicon,
             existing_words=set(candidates_by_word.keys()),
+            seeds=seeds,
+            intent_plan=intent_plan,
+            domain_hints=domain_hints,
         )
 
         LOGGER.debug(
@@ -452,7 +507,7 @@ class SemanticRecallEngine:
         for word, distance in scored[:axis_take]:
             entry = lexicon.entries[word]
             grammar_ok = self._is_grammar_ok(entry)
-            bonus = self._intent_axis_bonus(intent=intent_plan.intent, entry=entry)
+            bonus = self._intent_axis_bonus(intent=intent_plan.intent, entry=entry) + self._domain_bonus_for_word(target=word, domain_hints=domain_hints)
             score = max(
                 0.05,
                 self.config.axis_weight_scale * (1.0 / (1.0 + distance)) + bonus,
@@ -544,50 +599,62 @@ class SemanticRecallEngine:
         self,
         lexicon: LexiconContainer,
         existing_words: Set[str],
+        seeds: Sequence[str],
+        intent_plan: IntentPlan,
+        domain_hints: Set[str],
     ) -> List[str]:
         probe_words: List[str] = []
+        seed_entries = [lexicon.entries[word] for word in seeds if word in lexicon.entries]
+        allowed_categories = {entry.category for entry in seed_entries if str(entry.category).strip()}
+        allowed_pos = {entry.grammar.pos for entry in seed_entries if str(entry.grammar.pos).strip()}
+        allowed_roots = {entry.hierarchy[0] for entry in seed_entries if entry.hierarchy}
+        base_iterable: Iterable[str]
 
         LOGGER.debug(
-            "semantic_recall.build_axis_probe_words begin prefer_content_words=%s existing_words=%s",
+            "semantic_recall.build_axis_probe_words begin prefer_content_words=%s existing_words=%s allowed_categories=%s allowed_pos=%s allowed_roots=%s domain_hints=%s intent=%s",
             self.config.prefer_content_words_in_axis,
             sorted(existing_words),
+            sorted(allowed_categories),
+            sorted(allowed_pos),
+            sorted(allowed_roots),
+            sorted(domain_hints),
+            intent_plan.intent,
         )
 
         if self.config.prefer_content_words_in_axis and lexicon.indexes.content_words:
-            for word in lexicon.indexes.content_words:
-                if word in lexicon.entries and word not in existing_words:
-                    probe_words.append(word)
-                    LOGGER.debug(
-                        "semantic_recall.build_axis_probe_words.accept_from_content_index word=%s",
-                        word,
-                    )
-                else:
-                    LOGGER.debug(
-                        "semantic_recall.build_axis_probe_words.skip_from_content_index word=%s reason=%s",
-                        word,
-                        "not_in_entries" if word not in lexicon.entries else "already_existing",
-                    )
+            base_iterable = list(lexicon.indexes.content_words)
         else:
-            for word in lexicon.entries.keys():
-                if word not in existing_words:
-                    probe_words.append(word)
-                    LOGGER.debug(
-                        "semantic_recall.build_axis_probe_words.accept_from_entries word=%s",
-                        word,
-                    )
-                else:
-                    LOGGER.debug(
-                        "semantic_recall.build_axis_probe_words.skip_from_entries word=%s reason=already_existing",
-                        word,
-                    )
+            base_iterable = list(lexicon.entries.keys())
 
-        if len(probe_words) > self.config.axis_probe_limit:
+        for word in base_iterable:
+            if word in existing_words:
+                continue
+            entry = lexicon.entries.get(word)
+            if entry is None:
+                continue
+            if domain_hints and word in self._domain_probe_words(domain_hints, lexicon):
+                probe_words.append(word)
+                continue
+            same_category = bool(allowed_categories and entry.category in allowed_categories)
+            same_pos = bool(allowed_pos and entry.grammar.pos in allowed_pos)
+            same_root = bool(entry.hierarchy and allowed_roots and entry.hierarchy[0] in allowed_roots)
+            if same_category or same_pos or same_root:
+                probe_words.append(word)
+
+        if not probe_words:
+            for word in base_iterable:
+                if word not in existing_words and word in lexicon.entries:
+                    probe_words.append(word)
+
+        intent_limit = self._axis_probe_limit_for_intent(intent_plan.intent)
+        limit = min(max(1, intent_limit), max(1, int(self.config.axis_probe_limit)))
+        if len(probe_words) > limit:
             LOGGER.debug(
-                "semantic_recall.build_axis_probe_words.truncate original_count=%s axis_probe_limit=%s",
+                "semantic_recall.build_axis_probe_words.truncate original_count=%s limit=%s",
                 len(probe_words),
-                self.config.axis_probe_limit,
+                limit,
             )
-            probe_words = probe_words[: self.config.axis_probe_limit]
+            probe_words = probe_words[:limit]
 
         LOGGER.debug(
             "semantic_recall.build_axis_probe_words.result count=%s sample=%s",
@@ -671,6 +738,72 @@ class SemanticRecallEngine:
                 current.word,
                 old_grammar_ok,
                 current.grammar_ok,
+            )
+
+    def _detect_domain_hints(
+        self,
+        seeds: Sequence[str],
+        input_state: InputState,
+        lexicon: LexiconContainer,
+        dialogue_state: DialogueState,
+    ) -> Set[str]:
+        joined = " ".join(list(seeds) + list(input_state.normalized_tokens) + [str(dialogue_state.current_topic or '')]).strip()
+        hints: Set[str] = set()
+        for name, keywords in DOMAIN_HINT_WORDS.items():
+            if any(keyword and keyword in joined for keyword in keywords):
+                hints.add(name)
+        return hints
+
+    def _domain_probe_words(self, domain_hints: Set[str], lexicon: LexiconContainer) -> List[str]:
+        words: List[str] = []
+        seen: Set[str] = set()
+        for domain in sorted(domain_hints):
+            for word in DOMAIN_HINT_WORDS.get(domain, ()):
+                if word in lexicon.entries and word not in seen:
+                    seen.add(word)
+                    words.append(word)
+        return words[: max(1, int(self.config.domain_hint_probe_limit))]
+
+    def _axis_probe_limit_for_intent(self, intent: str) -> int:
+        if intent == "question":
+            return int(self.config.question_axis_probe_limit)
+        if intent == "explain":
+            return int(self.config.explain_axis_probe_limit)
+        return int(self.config.respond_axis_probe_limit)
+
+    def _domain_bonus_for_word(self, target: str, domain_hints: Set[str]) -> float:
+        if not self.config.enable_domain_hint_boost or not domain_hints:
+            return 0.0
+        for domain in domain_hints:
+            if target in DOMAIN_HINT_WORDS.get(domain, ()):
+                return float(self.config.domain_hint_bonus)
+        return 0.0
+
+    def _add_domain_hint_candidates(
+        self,
+        domain_hints: Set[str],
+        lexicon: LexiconContainer,
+        candidates_by_word: Dict[str, RecallCandidate],
+    ) -> None:
+        if not domain_hints:
+            return
+        for word in self._domain_probe_words(domain_hints, lexicon):
+            entry = lexicon.entries.get(word)
+            if entry is None:
+                continue
+            grammar_ok = self._is_grammar_ok(entry)
+            score = max(0.05, self.config.axis_weight_scale * 0.75 + self._domain_bonus_for_word(word, domain_hints))
+            self._upsert_candidate(
+                candidates_by_word=candidates_by_word,
+                candidate=RecallCandidate(
+                    word=word,
+                    score=score,
+                    source="axis",
+                    relation_path=[],
+                    axis_distance=0.0,
+                    grammar_ok=grammar_ok,
+                    note="domain_hint",
+                ),
             )
 
     def _intent_axis_bonus(self, intent: str, entry: LexiconEntry) -> float:

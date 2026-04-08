@@ -43,7 +43,14 @@ pipeline:
     function_seed_weight: 0.22
     content_seed_weight: 1.00
     prefer_content_words_in_axis: true
-    axis_probe_limit: 512
+    axis_probe_limit: 256
+    question_axis_probe_limit: 96
+    explain_axis_probe_limit: 128
+    respond_axis_probe_limit: 80
+    relation_limit_per_seed: 6
+    enable_domain_hint_boost: true
+    domain_hint_bonus: 0.16
+    domain_hint_probe_limit: 48
 
   slot_filler:
     marker_confidence: 0.88

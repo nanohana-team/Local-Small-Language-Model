@@ -18,6 +18,6 @@ for /f %%i in (requirements.txt) do (
 
 del tmp_requirements.txt
 
-python -m main --mode auto-learn --episodes 5000 --target-mode llm --input-mode llm --learning-tasks 5
+python -m main --mode auto-learn --episodes 2147483647 --target-mode llm --input-mode llm --learning-tasks 2
 
 exit

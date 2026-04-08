@@ -37,6 +37,14 @@ class LLMInputGeneratorConfig:
     max_output_tokens: int = 120
     history_inputs_limit: int = 8
     history_targets_limit: int = 4
+    diversity_cycle: tuple[str, ...] = (
+        '質問',
+        '説明要求',
+        '確認',
+        '共感・相談',
+        '予定確認',
+        '雑談',
+    )
 
 
 class LLMInputGenerator:
@@ -61,6 +69,8 @@ class LLMInputGenerator:
         recent_inputs = '\n'.join(f'- {text}' for text in history_inputs[-input_limit:]) or '- (none)'
         recent_targets = '\n'.join(f'- {text}' for text in history_targets[-target_limit:]) or '- (none)'
         topic_line = seed_topic.strip() or '日常会話全般'
+        diversity_cycle = tuple(self.config.diversity_cycle or ()) or ('質問', '説明要求', '確認', '共感・相談', '予定確認', '雑談')
+        target_style = diversity_cycle[(max(0, int(loop_index)) - 1) % len(diversity_cycle)]
 
         system_prompt = (
             'あなたは日本語対話学習データの入力生成器です。'
@@ -69,14 +79,17 @@ class LLMInputGenerator:
         )
         user_prompt = (
             f'現在の学習ループ番号: {loop_index}\n'
-            f'重点トピック: {topic_line}\n\n'
+            f'重点トピック: {topic_line}\n'
+            f'今回必ず含めたい発話タイプ: {target_style}\n\n'
             '最近の入力例:\n'
             f'{recent_inputs}\n\n'
             '最近の教師応答例:\n'
             f'{recent_targets}\n\n'
             '条件:\n'
             '- 日本語の自然な1〜2文\n'
+            f'- 今回は特に「{target_style}」に寄せる\n'
             '- 日常会話・質問・確認・軽い相談をバランスよく混ぜる\n'
+            '- 主語省略・照応・複文を適度に混ぜて入力分布を広げる\n'
             '- 同じ話題や表現の繰り返しを避ける\n'
             '- 短すぎる単語列ではなく、実際のユーザー入力らしくする\n'
             '- 暴力・違法・露骨な性的内容・個人情報は避ける\n'

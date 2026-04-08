@@ -33,6 +33,7 @@ _WHITE_ON_RED = "\033[41;97m"
 class RotationResult:
     latest_rotated_to: Path | None = None
     debug_rotated_to: Path | None = None
+    http_debug_rotated_to: Path | None = None
     chosen_stamp: str = ""
 
 
@@ -190,6 +191,7 @@ def rotate_previous_logs(
     log_dir: str | Path = "logs",
     latest_name: str = "latest.log",
     debug_name: str = "debug.log",
+    http_debug_name: str = "http_debug.log",
 ) -> RotationResult:
     """
     起動時に前回ログを回転する。
@@ -203,11 +205,13 @@ def rotate_previous_logs(
 
     latest_path = log_dir / latest_name
     debug_path = log_dir / debug_name
+    http_debug_path = log_dir / http_debug_name
 
     latest_ts = _extract_last_timestamp(latest_path)
     debug_ts = _extract_last_timestamp(debug_path)
+    http_debug_ts = _extract_last_timestamp(http_debug_path)
 
-    timestamps = [ts for ts in (latest_ts, debug_ts) if ts is not None]
+    timestamps = [ts for ts in (latest_ts, debug_ts, http_debug_ts) if ts is not None]
     if not timestamps:
         return RotationResult()
 
@@ -216,10 +220,15 @@ def rotate_previous_logs(
 
     latest_rotated_to = _safe_rename(latest_path, log_dir / f"{stamp}.log")
     debug_rotated_to = _safe_rename(debug_path, log_dir / f"{stamp}_debug.log")
+    http_debug_rotated_to = _safe_rename(
+        http_debug_path,
+        log_dir / f"{stamp}_http_debug.log",
+    )
 
     return RotationResult(
         latest_rotated_to=latest_rotated_to,
         debug_rotated_to=debug_rotated_to,
+        http_debug_rotated_to=http_debug_rotated_to,
         chosen_stamp=stamp,
     )
 
@@ -274,6 +283,7 @@ def setup_logging(
     latest_name: str = "latest.log",
     debug_name: str = "debug.log",
     console_level: int = logging.INFO,
+    http_debug_name: str = "http_debug.log",
 ) -> RotationResult:
     """
     構成:
@@ -288,6 +298,7 @@ def setup_logging(
         log_dir=log_dir,
         latest_name=latest_name,
         debug_name=debug_name,
+        http_debug_name=http_debug_name,
     )
 
     log_dir = Path(log_dir)
@@ -295,6 +306,7 @@ def setup_logging(
 
     latest_path = log_dir / latest_name
     debug_path = log_dir / debug_name
+    http_debug_path = log_dir / http_debug_name
 
     _clear_root_handlers()
     _enable_windows_vt_mode()
@@ -324,6 +336,24 @@ def setup_logging(
     root.addHandler(latest_handler)
     root.addHandler(console_handler)
 
+    http_debug_handler = logging.FileHandler(http_debug_path, mode="a", encoding="utf-8")
+    http_debug_handler.setLevel(logging.DEBUG)
+    http_debug_handler.setFormatter(file_formatter)
+
+    for logger_name in (
+        "httpx",
+        "httpcore",
+        "google",
+        "google.genai",
+        "urllib3",
+        "openai",
+    ):
+        transport_logger = logging.getLogger(logger_name)
+        transport_logger.handlers = []
+        transport_logger.addHandler(http_debug_handler)
+        transport_logger.setLevel(logging.DEBUG)
+        transport_logger.propagate = False
+
     _install_exception_hooks()
     _register_atexit(app_name)
 
@@ -332,10 +362,11 @@ def setup_logging(
 
     if rotation.chosen_stamp:
         logger.info(
-            "rotated_previous_logs stamp=%s latest=%s debug=%s",
+            "rotated_previous_logs stamp=%s latest=%s debug=%s http_debug=%s",
             rotation.chosen_stamp,
             str(rotation.latest_rotated_to) if rotation.latest_rotated_to else "-",
             str(rotation.debug_rotated_to) if rotation.debug_rotated_to else "-",
+            str(rotation.http_debug_rotated_to) if rotation.http_debug_rotated_to else "-",
         )
 
     return rotation
