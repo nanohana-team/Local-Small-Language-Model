@@ -1,141 +1,119 @@
 # LSLM v4 ロギング仕様
 
-## 0. 本書の役割
+## 1. この文書の役割
 
-本書は、LSLM v4 の観測基盤を定義する。  
-目的は、デバッグのためだけではなく、**思考過程を比較・分析・改善するための共通ログ基盤** を固定することである。
+本書は、LSLM v4 のログとトレースの仕様を定義します。  
+v4 においてログは、単なるデバッグ補助ではありません。  
+ログは **思考過程を観測し、比較し、改善するための中核装置** です。
 
-本書が扱うのは以下である。
-
-- ログの種類
-- 出力先
-- レベル運用
-- トレース構造
-- ローテート
-- 例外・警告の集約
-
-思想は `philosophy.md`、実装順序は `implementation_plan.md`、報酬設計は `reward_design.md` に委譲する。
+特に relation 中心設計では、**どの relation をどうたどったか** を残せなければ、発散と収束を追跡できません。
 
 ---
 
-## 1. ログの位置づけ
+## 2. ログの目的
 
-LSLM v4 におけるログは、単なる `print()` の置き換えではない。  
-ログは、**知識ネットワーク上で何を参照し、何を広げ、何を捨て、何を採用したか** を観測するための中核機能である。
+v4 のログは、少なくとも次を満たす必要があります。
 
-そのため v4 では、以下の 3 層を分けて扱う。
-
-1. 人間可読ログ
-2. 構造化トレース
-3. 評価・学習向け記録
-
-本書は 1 と 2 を主対象とし、3 との接続点も最低限定義する。
+1. 実行失敗を追える
+2. 中間段階を追える
+3. 同条件比較ができる
+4. relation path を追える
+5. 学習や分析へ再利用できる
+6. 低資源環境でも重くなりすぎない
 
 ---
 
-## 2. 出力先
+## 3. ログの三層構造
 
-### 2.1 人間可読ログ
+v4 ではログを次の 3 層に分けます。
 
-#### `runtime/logs/latest.log`
-対象:
+## 3.1 運用ログ
+
+人間が通常運用で読むログです。
+
+用途:
+
+- 起動確認
+- 進捗確認
+- warning / error 確認
+- relation validation warning 確認
+- 終了理由確認
+
+推奨ファイル:
+
+- `runtime/logs/latest.log`
+
+推奨レベル:
 
 - `INFO`
 - `WARNING`
 - `ERROR`
 - `CRITICAL`
 
-用途:
+---
 
-- 日常運用の確認
-- 異常検知
-- 実行の大まかな流れの把握
+## 3.2 詳細ログ
 
-#### `runtime/logs/debug.log`
-対象:
-
-- `DEBUG`
-- `INFO`
-- `WARNING`
-- `ERROR`
-- `CRITICAL`
+開発者が原因調査を行うための詳細ログです。
 
 用途:
 
-- 詳細調査
-- 候補数や棄却理由の確認
-- 開発時の深掘り
+- 候補生成数の確認
+- relation type ごとの探索量確認
+- 閾値挙動の確認
+- フォールバック理由の確認
+- 例外解析
 
-### 2.2 構造化トレース
+推奨ファイル:
 
-#### `runtime/traces/latest.jsonl`
-対象:
+- `runtime/logs/debug.log`
 
-- 1 ターンごとの完全トレース
+推奨レベル:
 
-用途:
-
-- 中間状態の比較
-- 再現実験
-- 学習入力への再利用
-- evaluator への再投入
-
-### 2.3 コンソール
-
-既定では以下を表示する。
-
-- `INFO`
-- `WARNING`
-- `ERROR`
-- `CRITICAL`
-
-必要に応じて `console_level=logging.DEBUG` を許可する。
+- `DEBUG` 以上すべて
 
 ---
 
-## 3. レベル運用
+## 3.3 構造化トレース
 
-### 3.1 `DEBUG`
+1 入力 1 レコードの JSONL です。  
+学習・比較・再現実験・可視化に使います。
 
-- 候補数
-- relation 展開件数
-- pruning 詳細
-- grammar check 詳細
-- 各 stage の中間状態
+推奨ファイル:
 
-### 3.2 `INFO`
+- `runtime/traces/latest.jsonl`
 
-- 起動 / 終了
-- 辞書ロード成功
-- 1 ターン開始 / 終了
-- evaluator 接続成功
-- モード変更
+特徴:
 
-### 3.3 `WARNING`
-
-- フォールバック発生
-- 候補不足
-- 想定外だが継続可能な状態
-- evaluator タイムアウト時の代替動作
-
-### 3.4 `ERROR`
-
-- 該当ターンの失敗
-- 辞書読み込み失敗
-- 必須構造不足
-- JSONL 出力失敗
-
-### 3.5 `CRITICAL`
-
-- 実行継続不能
-- ログ初期化自体の失敗
-- コアデータ破損
+- 人間可読より機械再利用を優先
+- 中間状態を段階別に保存
+- relation path と timing と score を含む
 
 ---
 
-## 4. 人間可読ログ形式
+## 4. 時刻と識別子
 
-形式は以下とする。
+### 4.1 時刻
+
+- JST（Asia/Tokyo）を標準とする
+- 人間可読ログは秒精度
+- 必要なら trace ではミリ秒またはナノ秒計測を別保持する
+
+### 4.2 識別子
+
+最低限、次を持つことを推奨します。
+
+- `session_id`
+- `turn_id`
+- `trace_id`
+
+1 入力 1 trace の原則を守るため、`turn_id` は必須とします。
+
+---
+
+## 5. 人間可読ログ形式
+
+基本形式:
 
 ```text
 YYYY-MM-DD HH:MM:SS [LEVEL] message
@@ -144,237 +122,242 @@ YYYY-MM-DD HH:MM:SS [LEVEL] message
 例:
 
 ```text
-2026-04-08 19:42:10 [INFO] application_start
-2026-04-08 19:42:11 [DEBUG] divergence_candidates=12
+2026-04-08 20:35:10 [INFO] application_start
+2026-04-08 20:35:10 [INFO] lexicon_loaded entries=30020 relations=182004
+2026-04-08 20:35:11 [DEBUG] divergence relation_type=hypernym candidates=14
+2026-04-08 20:35:11 [WARNING] relation_dangling target=concept:consume source=concept:eat
 ```
 
 仕様:
 
-- 時刻は JST（Asia/Tokyo）固定
-- 秒精度まで出力する
-- ロガー名は原則出さない
-- ファイルとコンソールで基本形式を揃える
-- 色付けはコンソールのみに適用する
+- ロガー名は原則省略してよい
+- ANSI 色はコンソール専用
+- ファイルへ制御文字を残さない
 
 ---
 
-## 5. トレースの基本方針
+## 6. JSONL トレース必須項目
 
-### 5.1 1 ターン 1 レコード
-1 つの user input に対して 1 つの JSONL レコードを出力する。
-
-### 5.2 ステージごとに構造を分ける
-Plan / Divergence / Convergence / Slot / Surface / Response を別キーとして保持する。
-
-### 5.3 棄却理由を残す
-採用結果だけでなく、何をなぜ捨てたかを残す。
-
-### 5.4 timing を必ず残す
-全体時間だけでなく、可能なら stage 単位の所要時間も残す。
-
----
-
-## 6. JSONL トレースの最小スキーマ
+1 入力ごとに最低限次を持ちます。
 
 ```json
 {
-  "turn_id": "20260408_194210_0001",
-  "timestamp_jst": "2026-04-08T19:42:10+09:00",
-  "input": {
-    "raw": "今日は何をするべき？",
-    "features": {}
-  },
+  "session_id": "20260408_203500",
+  "turn_id": "20260408_203511_0001",
+  "input": "今日は何をするべき？",
+  "input_features": {},
   "plan": {},
-  "divergence": {
-    "seeds": [],
-    "candidates": [],
-    "paths": []
-  },
-  "convergence": {
-    "selected": [],
-    "rejected": []
-  },
-  "slots": {
-    "required": [],
-    "filled": {},
-    "missing": []
-  },
-  "surface": {
-    "plan": {},
-    "drafts": []
-  },
-  "response": {
-    "text": "",
-    "status": "ok"
-  },
+  "divergence_candidates": [],
+  "explored_relations": [],
+  "convergence_candidates": [],
+  "accepted_relations": [],
+  "filled_slots": {},
+  "surface_plan": {},
+  "response": "...",
   "scores": {},
   "reward": {},
   "timing": {}
 }
 ```
 
-`reward` は未導入段階では空でもよい。  
-ただしキー自体は将来互換性のため確保してよい。
-
 ---
 
-## 7. ステージ別の記録項目
+## 7. 段階別に何を残すか
 
-### 7.1 Input / Feature
+## 7.1 Input Analysis
 
-- raw input
-- normalization result
-- extracted keywords
-- detected mode
-- conversation metadata（必要な範囲のみ）
+- raw_input
+- normalized_input
+- unknown_words
+- detected_topics
+- detected_constraints
+- tone_hints
 
-### 7.2 Plan
+## 7.2 Plan
 
 - intent
 - response_mode
 - required_slots
-- constraints
-- fallback_policy
+- relation_type_priority
+- priority
+- fallback_reason
 
-### 7.3 Divergence
+## 7.3 Divergence
 
-- seeds
-- relation expansion paths
-- axis-neighbor hits
-- candidate pool
-- candidate count
+- seed nodes
+- explored relations
+- relation type counts
+- candidate ids
+- candidate scores
+- branch depth
+- prune reasons
 
-### 7.4 Convergence
+### explored relations の推奨形式
 
-- selected candidates
+```json
+{
+  "from": "concept:eat",
+  "type": "hypernym",
+  "to": "concept:consume",
+  "weight": 0.92,
+  "reason": "priority:semantic",
+  "depth": 1
+}
+```
+
+## 7.4 Convergence
+
+- accepted candidates
 - rejected candidates
-- rejection reasons
-- score breakdown
+- accepted relations
+- rejected relations
+- ranking reasons
+- redundancy penalties
+- contradiction flags
 
-### 7.5 Slot
+## 7.5 Slot
 
-- required slots
+- selected slot frame
 - filled slots
 - missing slots
-- slot confidence
+- slot evidence
 
-### 7.6 Surface
+## 7.6 Surface
 
-- surface plan
-- phrasing candidates
-- grammar violations
-- selected phrasing reason
-
-### 7.7 Response
-
+- sentence plan
+- style choice
+- template id
 - final text
-- completion status
-- fallback used or not
+- postprocess notes
 
 ---
 
-## 8. 例外と警告の集約
+## 8. score / reward / timing の扱い
 
-### 8.1 warnings
-`warnings.warn()` は logging へ集約する。
+### 8.1 score
 
-### 8.2 uncaught exceptions
-未捕捉例外は必ず `ERROR` 以上で記録する。
+構造評価や採用判定のための数値。  
+例:
 
-### 8.3 stage context
-例外時は、可能な限り以下を付与する。
+- plan_fitness
+- relation_coverage
+- divergence_relevance
+- convergence_fitness
+- relation_precision
+- slot_fitness
+- grammar_fitness
+- dangling_rate
 
-- turn_id
-- stage_name
-- active input summary
-- current candidate counts
+### 8.2 reward
 
-これにより「どの段階で落ちたか」を即座に追えるようにする。
+学習接続に使う保存値。  
+`internal` / `external` / `total` を基本とします。
+
+### 8.3 timing
+
+最低限、次を残します。
+
+- total_ms
+- input_analysis_ms
+- plan_ms
+- divergence_ms
+- convergence_ms
+- slot_ms
+- surface_ms
+- evaluator_ms
+
+これにより、品質低下と遅延増加を分けて追えます。
 
 ---
 
-## 9. 起動時ローテート
+## 9. ローテート方針
 
-アプリ起動時、前回実行分のログを自動退避する。
+起動時に最新ファイルを退避し、新しい `latest.*` を作る方式を推奨します。
 
-### 9.1 対象
+対象例:
 
 - `runtime/logs/latest.log`
 - `runtime/logs/debug.log`
 - `runtime/traces/latest.jsonl`
 
-### 9.2 退避先
+リネーム例:
 
-- `runtime/logs/YYYYMMDDhhmmss.log`
-- `runtime/logs/YYYYMMDDhhmmss_debug.log`
-- `runtime/traces/YYYYMMDDhhmmss.jsonl`
+- `runtime/logs/20260408203510.log`
+- `runtime/logs/20260408203510_debug.log`
+- `runtime/traces/20260408203510.jsonl`
 
-### 9.3 タイムスタンプ決定
-
-優先順位は次の通り。
-
-1. ログ末尾から最後の時刻を抽出
-2. 抽出失敗時はファイル更新時刻を使用
-3. 対象不存在時は何もしない
-
-### 9.4 衝突時
-同名が存在する場合は `_1`, `_2` を付与して退避する。
+衝突時は `_1`, `_2` を付けて退避します。
 
 ---
 
-## 10. 初期化仕様
+## 10. warning / exception の扱い
 
-ロギングはアプリ起動直後に `setup_logging()` を一度だけ呼んで初期化する。
+### 10.1 warnings
 
-要件:
+`warnings.warn()` は logging 側へ集約します。
 
-- 複数回初期化で handler 重複を起こさない
-- ログディレクトリを自動作成する
-- コンソール / latest / debug の 3 出力を同時に扱える
-- trace writer を別管理できる
+### 10.2 未捕捉例外
 
----
+未捕捉例外は runtime log と debug log の両方へ記録し、必要なら trace の `failure` セクションにも要約します。
 
-## 11. 実務ルール
+### 10.3 KeyboardInterrupt
 
-### 11.1 `print()` を常用しない
-一時デバッグ以外は logging へ統一する。
+通常の停止として扱い、error 汚染を避けます。
 
-### 11.2 候補数だけでなく理由を残す
-「候補 0 件」だけでは弱い。  
-なぜ 0 件になったかを残す。
+### 10.4 relation validation warning
 
-### 11.3 長文データはログとトレースで役割を分ける
-人間可読ログへ巨大 JSON を垂れ流さない。  
-詳細構造は JSONL トレースへ置く。
-
-### 11.4 失敗時ほど情報を多く残す
-正常時よりも異常時のほうが分析価値が高い。  
-例外経路には stage 情報を積極的に付与する。
+dangling relation や inverse 規約違反は warning として記録し、strict mode では failure として扱います。
 
 ---
 
-## 12. reward 設計との接続
+## 11. 出力量の制御
 
-`reward_design.md` で定義する以下の情報は、トレースに保存できるようにしておく。
+v4 は低資源前提なので、何でもフル保存すれば良いわけではありません。  
+次の 3 モード程度に分けるのが現実的です。
 
-- stage scores
-- `reward.internal`
-- `reward.external`
-- `reward.total`
-- evaluator feedback summary
+### 11.1 minimal
 
-ただし、報酬計算ロジックそのものは本書の責務ではない。
+- 運用ログのみ濃く残す
+- trace は要約版
+
+### 11.2 standard
+
+- 通常の開発運用向け
+- 1 入力 1 trace を残す
+
+### 11.3 deep_trace
+
+- 候補や relation 経路まで広く残す
+- 学習分析やバグ調査向け
+
+モード選択は設定で切り替え、コードへ焼き込まないようにします。
+
+---
+
+## 12. ログでやってはいけないこと
+
+1. `print()` を散在させる
+2. 最終応答だけ残して中間状態を捨てる
+3. trace と debug log の役割を混ぜる
+4. 辞書データ丸ごとを毎回過剰出力する
+5. explored path と accepted path を混ぜる
+6. 条件比較に必要な識別子を付けない
 
 ---
 
 ## 13. 結論
 
-LSLM v4 のログは、単に「何か起きた」を記録するものではない。  
-**思考過程を後から再構成できること** が価値である。
+LSLM v4 のログは、
+**運用ログ・詳細ログ・構造化トレースの三層で、relation path を含む思考過程を段階別に追えること** が核心です。
 
-- 人間可読ログで状況を追う
-- JSONL トレースで内部状態を追う
-- 例外・警告を集約して壊れ方を追う
+この仕組みが先に整っていれば、
 
-この 3 層が成立して初めて、v4 は改善可能なシステムになる。
+- 品質の崩れ
+- relation 不足
+- 遅延の悪化
+- 発散不足
+- 収束ミス
+- slot 欠落
+
+を後から明確に比較できます。  
+v4 においてログは後付けではなく、最初から中核機能です。

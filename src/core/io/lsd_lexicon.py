@@ -32,6 +32,35 @@ DEFAULT_SEMANTIC_AXES = [
     "discourse_force",
 ]
 
+RELATION_DIRECTIONS = {"outbound", "inbound", "bidirectional"}
+RELATION_USAGE_STAGES = {"planning", "divergence", "convergence", "slot", "surface"}
+RELATION_LAYERS = {"semantic", "syntactic", "expressive"}
+RELATION_TYPE_RULES: Dict[str, Dict[str, Any]] = {
+    "synonym": {"layer": "semantic", "direction": "bidirectional", "inverse_type": "synonym", "usage_stage": ["divergence", "convergence", "surface"]},
+    "antonym": {"layer": "semantic", "direction": "bidirectional", "inverse_type": "antonym", "usage_stage": ["divergence", "convergence"]},
+    "hypernym": {"layer": "semantic", "direction": "outbound", "inverse_type": "hyponym", "usage_stage": ["divergence", "convergence"]},
+    "hyponym": {"layer": "semantic", "direction": "outbound", "inverse_type": "hypernym", "usage_stage": ["divergence", "convergence"]},
+    "cause_of": {"layer": "semantic", "direction": "outbound", "inverse_type": "caused_by", "usage_stage": ["divergence", "convergence"]},
+    "caused_by": {"layer": "semantic", "direction": "outbound", "inverse_type": "cause_of", "usage_stage": ["divergence", "convergence"]},
+    "part_of": {"layer": "semantic", "direction": "outbound", "inverse_type": "has_part", "usage_stage": ["divergence", "convergence"]},
+    "has_part": {"layer": "semantic", "direction": "outbound", "inverse_type": "part_of", "usage_stage": ["divergence", "convergence"]},
+    "often_with": {"layer": "semantic", "direction": "bidirectional", "inverse_type": "often_with", "usage_stage": ["divergence", "surface"]},
+    "related_to": {"layer": "semantic", "direction": "bidirectional", "inverse_type": "related_to", "usage_stage": ["divergence", "convergence", "surface"]},
+    "target_domain": {"layer": "semantic", "direction": "outbound", "usage_stage": ["divergence", "convergence"]},
+    "predicate_slot": {"layer": "syntactic", "direction": "outbound", "usage_stage": ["slot", "convergence"]},
+    "modifier_head": {"layer": "syntactic", "direction": "outbound", "usage_stage": ["convergence", "surface"]},
+    "connective_sequence": {"layer": "syntactic", "direction": "outbound", "usage_stage": ["surface"]},
+    "subject_predicate": {"layer": "syntactic", "direction": "outbound", "usage_stage": ["slot", "convergence"]},
+    "argument_role": {"layer": "syntactic", "direction": "outbound", "usage_stage": ["slot", "convergence"]},
+    "style_variant": {"layer": "expressive", "direction": "bidirectional", "inverse_type": "style_variant", "usage_stage": ["surface", "convergence"]},
+    "politeness_variant": {"layer": "expressive", "direction": "bidirectional", "inverse_type": "politeness_variant", "usage_stage": ["surface", "convergence"]},
+    "paraphrase": {"layer": "expressive", "direction": "bidirectional", "inverse_type": "paraphrase", "usage_stage": ["surface", "convergence"]},
+    "collocation": {"layer": "expressive", "direction": "bidirectional", "inverse_type": "collocation", "usage_stage": ["divergence", "surface"]},
+    "register_variant": {"layer": "expressive", "direction": "bidirectional", "inverse_type": "register_variant", "usage_stage": ["surface", "convergence"]},
+}
+
+TOP_LEVEL_BINARY_META_KEY = "__lslm_top_level__"
+
 
 class ConsoleProgressBar:
     def __init__(self, total: int, title: str = "Loading", width: int = 28, enabled: bool | None = None) -> None:
@@ -209,6 +238,115 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _to_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _canonicalize_surface_forms(value: Any, fallback_word: str | None = None) -> List[Dict[str, Any]]:
+    items: List[Any]
+    if isinstance(value, list):
+        items = list(value)
+    elif value is None:
+        items = []
+    else:
+        items = [value]
+
+    out: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def append_form(text: str | None, kind: str = "variant", extras: Mapping[str, Any] | None = None) -> None:
+        normalized_text = _to_optional_str(text)
+        if not normalized_text:
+            return
+        normalized_kind = _to_optional_str(kind) or "variant"
+        key = (normalized_text, normalized_kind)
+        if key in seen:
+            return
+        seen.add(key)
+        form: Dict[str, Any] = {"text": normalized_text, "kind": normalized_kind}
+        if isinstance(extras, Mapping):
+            for extra_key, extra_value in extras.items():
+                if extra_key not in {"text", "surface", "value", "kind", "type"}:
+                    form[str(extra_key)] = extra_value
+        out.append(form)
+
+    append_form(fallback_word, kind="lemma")
+
+    for item in items:
+        if isinstance(item, Mapping):
+            extras = dict(item)
+            text = extras.get("text", extras.get("surface", extras.get("value")))
+            kind = extras.get("kind", extras.get("type", "variant"))
+            append_form(text, kind=str(kind), extras=extras)
+        else:
+            append_form(str(item), kind="variant")
+
+    return out
+
+
+def _canonicalize_senses(value: Any) -> List[Dict[str, Any]]:
+    items: List[Any]
+    if isinstance(value, list):
+        items = list(value)
+    elif value is None:
+        items = []
+    else:
+        items = [value]
+
+    out: List[Dict[str, Any]] = []
+    for i, item in enumerate(items, start=1):
+        raw = dict(item) if isinstance(item, Mapping) else {"gloss": str(item)}
+        sense_id = _to_optional_str(raw.get("id")) or f"sense:{i}"
+        gloss = _to_optional_str(raw.get("gloss", raw.get("label", raw.get("description"))))
+        concept_ids = _unique_keep_order(
+            _to_str_list(raw.get("concept_ids", raw.get("concept_id", [])))
+        )
+        slot_frame_override = _to_optional_str(
+            raw.get("slot_frame_override", raw.get("slot_frame_id"))
+        )
+
+        normalized: Dict[str, Any] = {"id": sense_id}
+        if gloss is not None:
+            normalized["gloss"] = gloss
+        if concept_ids:
+            normalized["concept_ids"] = concept_ids
+        if slot_frame_override is not None:
+            normalized["slot_frame_override"] = slot_frame_override
+        if raw.get("priority") is not None:
+            normalized["priority"] = round(_to_float(raw.get("priority"), 1.0), 6)
+
+        for key, field in raw.items():
+            if key in {
+                "id",
+                "gloss",
+                "label",
+                "description",
+                "concept_ids",
+                "concept_id",
+                "slot_frame_override",
+                "slot_frame_id",
+                "priority",
+            }:
+                continue
+            normalized[str(key)] = field
+
+        out.append(normalized)
+
+    return out
+
+
+def _derive_entry_concept_ids(raw: Mapping[str, Any], senses: List[Dict[str, Any]]) -> List[str]:
+    concept_ids = _unique_keep_order(
+        _to_str_list(raw.get("concept_ids", raw.get("concept_id", [])))
+    )
+    for sense in senses:
+        concept_ids.extend(_to_str_list(sense.get("concept_ids", [])))
+    return _unique_keep_order([str(v) for v in concept_ids])
+
+
 def _is_entry_mapping(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -218,9 +356,14 @@ def _is_entry_mapping(value: Any) -> bool:
     return (
         isinstance(value.get("vector"), Mapping)
         or "word" in value
+        or "lemma" in value
         or "category" in value
         or "slots" in value
         or "relations" in value
+        or "surface_forms" in value
+        or "senses" in value
+        or "concept_ids" in value
+        or "slot_frame_id" in value
     )
 
 
@@ -274,20 +417,55 @@ def _canonicalize_entry(key: str, entry: Any) -> Dict[str, Any]:
         raise TypeError(f"Lexicon entry for {key!r} must be a mapping")
 
     raw = dict(entry)
+    grammar = _canonicalize_grammar(raw.get("grammar", {}))
+    canonical_word = str(raw.get("word", raw.get("lemma", key)))
+    senses = _canonicalize_senses(raw.get("senses", []))
+    concept_ids = _derive_entry_concept_ids(raw, senses)
+    surface_forms = _canonicalize_surface_forms(raw.get("surface_forms", raw.get("surfaces", [])), canonical_word)
+    slot_frame_id = _to_optional_str(raw.get("slot_frame_id", raw.get("slot_frame")))
+
     normalized: Dict[str, Any] = {
-        "word": str(raw.get("word", key)),
-        "category": str(raw.get("category", "unknown")),
+        "word": canonical_word,
+        "category": str(raw.get("category", grammar.get("pos", "unknown"))),
         "hierarchy": _to_str_list(raw.get("hierarchy", [])),
         "vector": _canonicalize_vector(raw.get("vector", {})),
-        "grammar": _canonicalize_grammar(raw.get("grammar", {})),
+        "grammar": grammar,
         "slots": list(raw.get("slots", [])) if isinstance(raw.get("slots", []), list) else [],
         "relations": list(raw.get("relations", [])) if isinstance(raw.get("relations", []), list) else [],
         "frequency": _to_float(raw.get("frequency", 0.0), 0.0),
         "style_tags": _to_str_list(raw.get("style_tags", [])),
         "meta": dict(raw.get("meta", {})) if isinstance(raw.get("meta", {}), Mapping) else {},
+        "surface_forms": surface_forms,
+        "senses": senses,
+        "concept_ids": concept_ids,
     }
 
-    for field in ("word", "category", "hierarchy", "vector", "grammar", "slots", "relations", "frequency", "style_tags", "meta"):
+    reading = _to_optional_str(raw.get("reading"))
+    if reading is not None:
+        normalized["reading"] = reading
+    if slot_frame_id is not None:
+        normalized["slot_frame_id"] = slot_frame_id
+
+    for field in (
+        "word",
+        "category",
+        "hierarchy",
+        "vector",
+        "grammar",
+        "slots",
+        "relations",
+        "frequency",
+        "style_tags",
+        "meta",
+        "surface_forms",
+        "surfaces",
+        "senses",
+        "concept_ids",
+        "concept_id",
+        "slot_frame_id",
+        "slot_frame",
+        "reading",
+    ):
         raw.pop(field, None)
 
     normalized.update(raw)
@@ -315,8 +493,15 @@ def flatten_hierarchical_lexicon(data: Mapping[str, Any]) -> Dict[str, Dict[str,
         for key, value in data["entries"].items():
             if _is_entry_mapping(value):
                 entries[str(key)] = _canonicalize_entry(str(key), value)
-        if entries:
-            return entries
+
+    if "lexical_entries" in data and isinstance(data["lexical_entries"], Mapping):
+        for key, value in data["lexical_entries"].items():
+            if isinstance(value, Mapping):
+                canonical_key = str(value.get("word", value.get("lemma", key)))
+                entries.setdefault(canonical_key, _canonicalize_entry(canonical_key, value))
+
+    if entries:
+        return entries
 
     if "lexicon" in data and isinstance(data["lexicon"], Mapping):
         _flatten_hierarchy_node(data["lexicon"], entries)
@@ -339,10 +524,22 @@ def _ensure_indexes(data: MutableMapping[str, Any], entries: Mapping[str, Dict[s
     content_words: List[str] = []
     function_words: List[str] = []
     entry_path: Dict[str, List[str]] = {}
+    surface_to_entry: Dict[str, List[str]] = {}
+    concept_to_entries: Dict[str, List[str]] = {}
+    entry_to_concepts: Dict[str, List[str]] = {}
+    slot_frame_to_entries: Dict[str, List[str]] = {}
+    sense_to_entry: Dict[str, List[str]] = {}
 
     existing_entry_path = indexes.get("entry_path", {})
     if not isinstance(existing_entry_path, Mapping):
         existing_entry_path = {}
+
+    def append_unique(target: Dict[str, List[str]], key: str | None, value: str) -> None:
+        if not key:
+            return
+        bucket = target.setdefault(str(key), [])
+        if value not in bucket:
+            bucket.append(value)
 
     for word, entry in entries.items():
         grammar = _canonicalize_grammar(entry.get("grammar", {}))
@@ -370,12 +567,37 @@ def _ensure_indexes(data: MutableMapping[str, Any], entries: Mapping[str, Dict[s
             else:
                 entry_path[word] = [word]
 
+        append_unique(surface_to_entry, word, word)
+        reading = _to_optional_str(entry.get("reading"))
+        append_unique(surface_to_entry, reading, word)
+        for form in _canonicalize_surface_forms(entry.get("surface_forms", []), word):
+            append_unique(surface_to_entry, _to_optional_str(form.get("text")), word)
+
+        senses = _canonicalize_senses(entry.get("senses", []))
+        concept_ids = _derive_entry_concept_ids(entry, senses)
+        if concept_ids:
+            entry_to_concepts[word] = list(concept_ids)
+        for concept_id in concept_ids:
+            append_unique(concept_to_entries, concept_id, word)
+
+        slot_frame_id = _to_optional_str(entry.get("slot_frame_id"))
+        append_unique(slot_frame_to_entries, slot_frame_id, word)
+
+        for sense in senses:
+            append_unique(sense_to_entry, _to_optional_str(sense.get("id")), word)
+            append_unique(slot_frame_to_entries, _to_optional_str(sense.get("slot_frame_override")), word)
+
     indexes["by_pos"] = by_pos
     indexes["can_start"] = can_start
     indexes["can_end"] = can_end
     indexes["content_words"] = content_words
     indexes["function_words"] = function_words
     indexes["entry_path"] = entry_path
+    indexes["surface_to_entry"] = surface_to_entry
+    indexes["concept_to_entries"] = concept_to_entries
+    indexes["entry_to_concepts"] = entry_to_concepts
+    indexes["slot_frame_to_entries"] = slot_frame_to_entries
+    indexes["sense_to_entry"] = sense_to_entry
 
     # backward-compat aliases
     indexes["content_word"] = list(content_words)
@@ -399,7 +621,7 @@ def _ensure_meta(data: MutableMapping[str, Any], entries: Mapping[str, Dict[str,
 
     meta["semantic_axes"] = [str(v) for v in semantic_axes]
     if "version" not in meta:
-        meta["version"] = "v3"
+        meta["version"] = "v4"
     meta["entry_count"] = len(entries)
 
 
@@ -531,7 +753,584 @@ def normalize_lexicon_container(data: Mapping[str, Any]) -> Dict[str, Any]:
         container["indexes"] = merged_indexes
         _ensure_indexes(container, container["entries"])
 
+    top_level_extras = {
+        str(key): value
+        for key, value in data.items()
+        if key not in {"meta", "indexes", "entries", "lexicon", "lexical_entries"}
+    }
+    container.update(top_level_extras)
     return container
+
+
+def _new_validation_report() -> Dict[str, Any]:
+    return {"errors": [], "warnings": []}
+
+
+def _add_validation_issue(report: MutableMapping[str, Any], level: str, message: str) -> None:
+    if level not in {"errors", "warnings"}:
+        raise ValueError(f"Unsupported validation level: {level}")
+    bucket = report.setdefault(level, [])
+    if isinstance(bucket, list):
+        bucket.append(str(message))
+
+
+def _finalize_validation_report(report: Mapping[str, Any]) -> Dict[str, Any]:
+    errors = [str(v) for v in report.get("errors", [])] if isinstance(report.get("errors", []), list) else []
+    warnings = [str(v) for v in report.get("warnings", [])] if isinstance(report.get("warnings", []), list) else []
+    return {
+        "errors": errors,
+        "warnings": warnings,
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+    }
+
+
+def _raise_for_validation_errors(report: Mapping[str, Any], prefix: str = "Lexicon validation failed") -> None:
+    errors = [str(v) for v in report.get("errors", [])] if isinstance(report.get("errors", []), list) else []
+    if not errors:
+        return
+    preview = "\n".join(f"- {message}" for message in errors[:20])
+    if len(errors) > 20:
+        preview += f"\n- ... and {len(errors) - 20} more"
+    raise ValueError(f"{prefix}:\n{preview}")
+
+
+def _validate_surface_forms(surface_forms: Any, report: MutableMapping[str, Any], entry_label: str, *, strict_schema: bool) -> None:
+    if not isinstance(surface_forms, list):
+        _add_validation_issue(report, "errors", f"{entry_label}: surface_forms must be a list")
+        return
+    if strict_schema and not surface_forms:
+        _add_validation_issue(report, "errors", f"{entry_label}: surface_forms must not be empty in strict schema mode")
+    seen: set[tuple[str, str]] = set()
+    for index, form in enumerate(surface_forms):
+        label = f"{entry_label}.surface_forms[{index}]"
+        if not isinstance(form, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: surface form must be a mapping")
+            continue
+        text_value = _to_optional_str(form.get("text", form.get("surface", form.get("value"))))
+        if not text_value:
+            _add_validation_issue(report, "errors", f"{label}: text must be a non-empty string")
+            continue
+        kind_value = _to_optional_str(form.get("kind", form.get("type", "variant")))
+        if not kind_value:
+            _add_validation_issue(report, "errors", f"{label}: kind must be a non-empty string")
+            continue
+        dedupe_key = (text_value, kind_value)
+        if dedupe_key in seen:
+            _add_validation_issue(report, "warnings", f"{label}: duplicate surface form {dedupe_key!r}")
+        seen.add(dedupe_key)
+
+
+def _infer_relation_direction(relation: Mapping[str, Any], relation_rule: Mapping[str, Any] | None = None) -> str | None:
+    explicit_direction = _to_optional_str(relation.get("direction"))
+    if explicit_direction is not None:
+        return explicit_direction
+    if "bidirectional" in relation:
+        return "bidirectional" if _to_bool(relation.get("bidirectional"), False) else "outbound"
+    if relation_rule is not None:
+        return _to_optional_str(relation_rule.get("direction"))
+    return None
+
+
+def _validate_relation_mapping(
+    relation: Any,
+    report: MutableMapping[str, Any],
+    relation_label: str,
+    *,
+    existing_targets: Mapping[str, Any] | None = None,
+    strict_schema: bool,
+    strict_relations: bool,
+    require_closed_relations: bool,
+) -> None:
+    if not isinstance(relation, Mapping):
+        _add_validation_issue(report, "errors", f"{relation_label}: relation must be a mapping")
+        return
+
+    relation_type = _to_optional_str(relation.get("type"))
+    relation_target = _to_optional_str(relation.get("target"))
+    if not relation_type:
+        _add_validation_issue(report, "errors", f"{relation_label}: type must be a non-empty string")
+    if not relation_target:
+        _add_validation_issue(report, "errors", f"{relation_label}: target must be a non-empty string")
+
+    relation_rule = RELATION_TYPE_RULES.get(relation_type or "")
+    if relation_type and relation_rule is None and strict_relations:
+        _add_validation_issue(report, "errors", f"{relation_label}: unknown relation type {relation_type!r}")
+    elif relation_type and relation_rule is None:
+        _add_validation_issue(report, "warnings", f"{relation_label}: unknown relation type {relation_type!r}")
+
+    weight_value = relation.get("weight")
+    if weight_value is not None:
+        try:
+            weight = float(weight_value)
+        except (TypeError, ValueError):
+            _add_validation_issue(report, "errors", f"{relation_label}: weight must be numeric")
+        else:
+            if weight < 0.0 or weight > 1.0:
+                _add_validation_issue(report, "warnings", f"{relation_label}: weight {weight!r} is outside the recommended range [0.0, 1.0]")
+    elif strict_relations:
+        _add_validation_issue(report, "warnings", f"{relation_label}: weight is strongly recommended in strict relation mode")
+
+    direction = _infer_relation_direction(relation, relation_rule)
+    if direction is None:
+        if strict_relations:
+            _add_validation_issue(report, "warnings", f"{relation_label}: direction is strongly recommended in strict relation mode")
+    elif direction not in RELATION_DIRECTIONS:
+        _add_validation_issue(report, "errors", f"{relation_label}: direction must be one of {sorted(RELATION_DIRECTIONS)!r}")
+    elif relation_rule is not None and direction != relation_rule.get("direction"):
+        _add_validation_issue(report, "warnings", f"{relation_label}: direction {direction!r} differs from the canonical rule for {relation_type!r} ({relation_rule.get('direction')!r})")
+
+    confidence_value = relation.get("confidence")
+    if confidence_value is not None:
+        try:
+            confidence = float(confidence_value)
+        except (TypeError, ValueError):
+            _add_validation_issue(report, "errors", f"{relation_label}: confidence must be numeric")
+        else:
+            if confidence < 0.0 or confidence > 1.0:
+                _add_validation_issue(report, "warnings", f"{relation_label}: confidence {confidence!r} is outside the recommended range [0.0, 1.0]")
+    elif strict_relations:
+        _add_validation_issue(report, "warnings", f"{relation_label}: confidence is strongly recommended in strict relation mode")
+
+    usage_stage = relation.get("usage_stage")
+    if usage_stage is not None:
+        if not isinstance(usage_stage, list):
+            _add_validation_issue(report, "errors", f"{relation_label}: usage_stage must be a list when provided")
+        else:
+            stages = [_to_optional_str(value) for value in usage_stage]
+            if any(stage is None for stage in stages):
+                _add_validation_issue(report, "errors", f"{relation_label}: usage_stage must contain only non-empty strings")
+            else:
+                unknown_stages = sorted(stage for stage in stages if stage not in RELATION_USAGE_STAGES)
+                if unknown_stages:
+                    _add_validation_issue(report, "errors", f"{relation_label}: usage_stage contains unknown values {unknown_stages!r}")
+                if relation_rule is not None:
+                    canonical_stages = set(str(v) for v in relation_rule.get("usage_stage", []))
+                    missing_overlap = canonical_stages.isdisjoint(set(stages))
+                    if canonical_stages and missing_overlap:
+                        _add_validation_issue(report, "warnings", f"{relation_label}: usage_stage {stages!r} does not overlap the canonical stages for {relation_type!r} ({sorted(canonical_stages)!r})")
+    elif strict_relations:
+        _add_validation_issue(report, "warnings", f"{relation_label}: usage_stage is strongly recommended in strict relation mode")
+
+    relation_layer = _to_optional_str(relation.get("layer"))
+    if relation_layer is not None:
+        if relation_layer not in RELATION_LAYERS:
+            _add_validation_issue(report, "errors", f"{relation_label}: layer must be one of {sorted(RELATION_LAYERS)!r}")
+        elif relation_rule is not None and relation_layer != relation_rule.get("layer"):
+            _add_validation_issue(report, "warnings", f"{relation_label}: layer {relation_layer!r} differs from the canonical layer for {relation_type!r} ({relation_rule.get('layer')!r})")
+
+    inverse_type = _to_optional_str(relation.get("inverse_type"))
+    if inverse_type is not None:
+        if inverse_type not in RELATION_TYPE_RULES:
+            _add_validation_issue(report, "warnings", f"{relation_label}: inverse_type {inverse_type!r} is not a registered relation type")
+        elif relation_rule is not None and relation_rule.get("inverse_type") and inverse_type != relation_rule.get("inverse_type"):
+            _add_validation_issue(report, "warnings", f"{relation_label}: inverse_type {inverse_type!r} differs from the canonical inverse for {relation_type!r} ({relation_rule.get('inverse_type')!r})")
+
+    axes = relation.get("axes")
+    if axes is not None and not isinstance(axes, Mapping):
+        _add_validation_issue(report, "errors", f"{relation_label}: axes must be a mapping when provided")
+    constraints = relation.get("constraints")
+    if constraints is not None and not isinstance(constraints, Mapping):
+        _add_validation_issue(report, "errors", f"{relation_label}: constraints must be a mapping when provided")
+
+    meta = relation.get("meta")
+    if meta is not None and not isinstance(meta, Mapping):
+        _add_validation_issue(report, "errors", f"{relation_label}: meta must be a mapping when provided")
+        meta = None
+    source_value = _to_optional_str(relation.get("source"))
+    if source_value is None and isinstance(meta, Mapping):
+        source_value = _to_optional_str(meta.get("source"))
+    if strict_relations and source_value is None:
+        _add_validation_issue(report, "warnings", f"{relation_label}: source is strongly recommended in strict relation mode")
+
+    if relation_target and existing_targets:
+        if relation_target not in existing_targets:
+            level = "errors" if require_closed_relations else "warnings"
+            message = f"{relation_label}: target {relation_target!r} is not present in this container"
+            _add_validation_issue(report, level, message)
+
+
+def _validate_slot_frames_section(
+    slot_frames: Any,
+    report: MutableMapping[str, Any],
+    *,
+    strict_schema: bool,
+) -> Dict[str, Dict[str, Any]]:
+    if slot_frames is None:
+        if strict_schema:
+            _add_validation_issue(report, "errors", "strict schema mode requires top-level slot_frames")
+        return {}
+    if not isinstance(slot_frames, Mapping):
+        _add_validation_issue(report, "errors", "slot_frames must be a mapping")
+        return {}
+
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key, raw_frame in slot_frames.items():
+        frame_key = str(key)
+        label = f"slot_frames[{frame_key!r}]"
+        if not isinstance(raw_frame, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: slot frame must be a mapping")
+            continue
+        frame = dict(raw_frame)
+        frame_id = _to_optional_str(frame.get("id", frame_key))
+        if not frame_id:
+            _add_validation_issue(report, "errors", f"{label}: id must be a non-empty string")
+            continue
+        if strict_schema and _to_optional_str(frame.get("id")) is None:
+            _add_validation_issue(report, "errors", f"{label}: strict schema mode requires an explicit id field")
+        if _to_optional_str(frame.get("id")) not in {None, frame_key}:
+            _add_validation_issue(report, "errors", f"{label}: id must match the mapping key")
+        slots = frame.get("slots", [])
+        if not isinstance(slots, list):
+            _add_validation_issue(report, "errors", f"{label}: slots must be a list")
+            continue
+        if strict_schema and not slots:
+            _add_validation_issue(report, "errors", f"{label}: strict schema mode requires at least one slot")
+        seen_slot_names: set[str] = set()
+        for index, raw_slot in enumerate(slots):
+            slot_label = f"{label}.slots[{index}]"
+            if not isinstance(raw_slot, Mapping):
+                _add_validation_issue(report, "errors", f"{slot_label}: slot must be a mapping")
+                continue
+            slot_name = _to_optional_str(raw_slot.get("name"))
+            if not slot_name:
+                _add_validation_issue(report, "errors", f"{slot_label}: name must be a non-empty string")
+                continue
+            if slot_name in seen_slot_names:
+                _add_validation_issue(report, "errors", f"{slot_label}: duplicate slot name {slot_name!r}")
+            seen_slot_names.add(slot_name)
+            required_value = raw_slot.get("required")
+            if required_value is not None and not isinstance(required_value, bool):
+                _add_validation_issue(report, "warnings", f"{slot_label}: required should be boolean")
+        normalized[frame_key] = frame
+    return normalized
+
+
+def _validate_concepts_section(
+    concepts: Any,
+    report: MutableMapping[str, Any],
+    *,
+    strict_schema: bool,
+    strict_relations: bool,
+    require_closed_relations: bool,
+    slot_frames: Mapping[str, Any] | None = None,
+    declared_axes: List[str] | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    if concepts is None:
+        if strict_schema:
+            _add_validation_issue(report, "errors", "strict schema mode requires top-level concepts")
+        return {}
+    if not isinstance(concepts, Mapping):
+        _add_validation_issue(report, "errors", "concepts must be a mapping")
+        return {}
+
+    slot_frames = slot_frames or {}
+    declared_axis_set = set(declared_axes or [])
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key, raw_concept in concepts.items():
+        concept_key = str(key)
+        label = f"concepts[{concept_key!r}]"
+        if not isinstance(raw_concept, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: concept must be a mapping")
+            continue
+        concept = dict(raw_concept)
+        concept_id = _to_optional_str(concept.get("id", concept_key))
+        if not concept_id:
+            _add_validation_issue(report, "errors", f"{label}: id must be a non-empty string")
+            continue
+        if strict_schema and _to_optional_str(concept.get("id")) is None:
+            _add_validation_issue(report, "errors", f"{label}: strict schema mode requires an explicit id field")
+        if _to_optional_str(concept.get("id")) not in {None, concept_key}:
+            _add_validation_issue(report, "errors", f"{label}: id must match the mapping key")
+        if strict_schema and not _to_optional_str(concept.get("label")):
+            _add_validation_issue(report, "errors", f"{label}: strict schema mode requires a non-empty label")
+        axes = concept.get("axes", {})
+        if axes is not None and not isinstance(axes, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: axes must be a mapping when provided")
+        elif isinstance(axes, Mapping) and declared_axis_set:
+            unknown_axes = sorted(str(axis) for axis in axes.keys() if str(axis) not in declared_axis_set)
+            if unknown_axes:
+                _add_validation_issue(report, "warnings", f"{label}: undeclared semantic axes {unknown_axes}")
+        default_slot_frame_id = _to_optional_str(concept.get("default_slot_frame_id"))
+        if default_slot_frame_id and slot_frames and default_slot_frame_id not in slot_frames:
+            _add_validation_issue(report, "errors", f"{label}: default_slot_frame_id {default_slot_frame_id!r} is not defined in slot_frames")
+        relations = concept.get("relations", [])
+        if relations is not None and not isinstance(relations, list):
+            _add_validation_issue(report, "errors", f"{label}: relations must be a list when provided")
+        elif isinstance(relations, list):
+            for index, relation in enumerate(relations):
+                relation_label = f"{label}.relations[{index}]"
+                _validate_relation_mapping(
+                    relation,
+                    report,
+                    relation_label,
+                    existing_targets=concepts,
+                    strict_schema=strict_schema,
+                    strict_relations=strict_relations,
+                    require_closed_relations=require_closed_relations,
+                )
+        normalized[concept_key] = concept
+    return normalized
+
+
+def _collect_entry_concept_references(entry: Mapping[str, Any]) -> List[str]:
+    concept_ids = _to_str_list(entry.get("concept_ids", []))
+    senses = entry.get("senses", [])
+    if isinstance(senses, list):
+        for sense in senses:
+            if isinstance(sense, Mapping):
+                concept_ids.extend(_to_str_list(sense.get("concept_ids", [])))
+    return _unique_keep_order([str(value) for value in concept_ids if _to_optional_str(value)])
+
+
+def _validate_entries_section(
+    entries: Any,
+    report: MutableMapping[str, Any],
+    *,
+    strict_schema: bool,
+    strict_relations: bool,
+    require_closed_relations: bool,
+    concepts: Mapping[str, Any] | None = None,
+    slot_frames: Mapping[str, Any] | None = None,
+    declared_axes: List[str] | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(entries, Mapping):
+        _add_validation_issue(report, "errors", "entries must be a mapping")
+        return {}
+
+    concepts = concepts or {}
+    slot_frames = slot_frames or {}
+    declared_axis_set = set(declared_axes or [])
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key, raw_entry in entries.items():
+        entry_key = str(key)
+        label = f"entries[{entry_key!r}]"
+        if not isinstance(raw_entry, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: entry must be a mapping")
+            continue
+        entry = dict(raw_entry)
+        word = _to_optional_str(entry.get("word", entry.get("lemma", entry_key)))
+        if not word:
+            _add_validation_issue(report, "errors", f"{label}: word/lemma must be a non-empty string")
+            continue
+        if strict_schema and not entry.get("surface_forms"):
+            _add_validation_issue(report, "errors", f"{label}: strict schema mode requires surface_forms")
+        grammar = entry.get("grammar", {})
+        if not isinstance(grammar, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: grammar must be a mapping")
+        else:
+            pos = _to_optional_str(grammar.get("pos"))
+            if not pos:
+                _add_validation_issue(report, "errors", f"{label}: grammar.pos must be a non-empty string")
+        vector = entry.get("vector", {})
+        if vector is not None and not isinstance(vector, Mapping):
+            _add_validation_issue(report, "errors", f"{label}: vector must be a mapping when provided")
+        elif isinstance(vector, Mapping) and declared_axis_set:
+            unknown_axes = sorted(str(axis) for axis in vector.keys() if str(axis) not in declared_axis_set)
+            if unknown_axes:
+                _add_validation_issue(report, "warnings", f"{label}: undeclared semantic axes {unknown_axes}")
+        surface_forms = entry.get("surface_forms", [])
+        _validate_surface_forms(surface_forms, report, label, strict_schema=strict_schema)
+        reading = entry.get("reading")
+        if reading is not None and _to_optional_str(reading) is None:
+            _add_validation_issue(report, "errors", f"{label}: reading must be a non-empty string when provided")
+        concept_refs = _collect_entry_concept_references(entry)
+        if strict_schema and not concept_refs:
+            _add_validation_issue(report, "errors", f"{label}: strict schema mode requires at least one concept reference")
+        for concept_id in concept_refs:
+            if concepts and concept_id not in concepts:
+                _add_validation_issue(report, "errors", f"{label}: concept reference {concept_id!r} is not defined in concepts")
+        slot_frame_id = _to_optional_str(entry.get("slot_frame_id"))
+        if slot_frame_id and slot_frames and slot_frame_id not in slot_frames:
+            _add_validation_issue(report, "errors", f"{label}: slot_frame_id {slot_frame_id!r} is not defined in slot_frames")
+        entry_relations = entry.get("relations")
+        if entry_relations is not None:
+            if not isinstance(entry_relations, list):
+                _add_validation_issue(report, "errors", f"{label}: relations must be a list when provided")
+            else:
+                for index, relation in enumerate(entry_relations):
+                    relation_label = f"{label}.relations[{index}]"
+                    _validate_relation_mapping(
+                        relation,
+                        report,
+                        relation_label,
+                        existing_targets=concepts,
+                        strict_schema=strict_schema,
+                        strict_relations=strict_relations,
+                        require_closed_relations=require_closed_relations,
+                    )
+        senses = entry.get("senses", [])
+        if senses is not None and not isinstance(senses, list):
+            _add_validation_issue(report, "errors", f"{label}: senses must be a list when provided")
+        elif isinstance(senses, list):
+            for index, sense in enumerate(senses):
+                sense_label = f"{label}.senses[{index}]"
+                if not isinstance(sense, Mapping):
+                    _add_validation_issue(report, "errors", f"{sense_label}: sense must be a mapping")
+                    continue
+                sense_id = sense.get("id")
+                if strict_schema and _to_optional_str(sense_id) is None:
+                    _add_validation_issue(report, "errors", f"{sense_label}: strict schema mode requires a non-empty id")
+                if "concept_ids" in sense:
+                    if not isinstance(sense.get("concept_ids"), list):
+                        _add_validation_issue(report, "errors", f"{sense_label}: concept_ids must be a list")
+                    else:
+                        for concept_id in _to_str_list(sense.get("concept_ids", [])):
+                            if concepts and concept_id not in concepts:
+                                _add_validation_issue(report, "errors", f"{sense_label}: concept reference {concept_id!r} is not defined in concepts")
+                slot_override = _to_optional_str(sense.get("slot_frame_override", sense.get("slot_frame_id")))
+                if slot_override and slot_frames and slot_override not in slot_frames:
+                    _add_validation_issue(report, "errors", f"{sense_label}: slot_frame_override {slot_override!r} is not defined in slot_frames")
+        normalized[entry_key] = entry
+    return normalized
+
+
+def collect_lexicon_validation_report(
+    data: Mapping[str, Any],
+    *,
+    strict_schema: bool = False,
+    strict_relations: bool = False,
+    require_closed_relations: bool = False,
+) -> Dict[str, Any]:
+    report = _new_validation_report()
+    if not isinstance(data, Mapping):
+        _add_validation_issue(report, "errors", "lexicon container must be a mapping")
+        return _finalize_validation_report(report)
+
+    meta = data.get("meta", {})
+    if meta is not None and not isinstance(meta, Mapping):
+        _add_validation_issue(report, "errors", "meta must be a mapping")
+        meta = {}
+    indexes = data.get("indexes", {})
+    if indexes is not None and not isinstance(indexes, Mapping):
+        _add_validation_issue(report, "errors", "indexes must be a mapping")
+
+    meta = dict(meta) if isinstance(meta, Mapping) else {}
+    semantic_axes = meta.get("semantic_axes", [])
+    if semantic_axes is None:
+        semantic_axes = []
+    if not isinstance(semantic_axes, list):
+        _add_validation_issue(report, "errors", "meta.semantic_axes must be a list when provided")
+        semantic_axes = []
+    declared_axes = [str(axis) for axis in semantic_axes]
+
+    if strict_schema and _to_optional_str(meta.get("schema_version")) is None:
+        _add_validation_issue(report, "warnings", "strict schema mode recommends meta.schema_version")
+
+    slot_frames = _validate_slot_frames_section(data.get("slot_frames"), report, strict_schema=strict_schema)
+    concepts = _validate_concepts_section(
+        data.get("concepts"),
+        report,
+        strict_schema=strict_schema,
+        strict_relations=strict_relations,
+        require_closed_relations=require_closed_relations,
+        slot_frames=slot_frames,
+        declared_axes=declared_axes,
+    )
+    entries = data.get("entries", {})
+    if strict_schema and not entries:
+        _add_validation_issue(report, "errors", "strict schema mode requires entries after normalization")
+    _validate_entries_section(
+        entries,
+        report,
+        strict_schema=strict_schema,
+        strict_relations=strict_relations,
+        require_closed_relations=require_closed_relations,
+        concepts=concepts,
+        slot_frames=slot_frames,
+        declared_axes=declared_axes,
+    )
+    return _finalize_validation_report(report)
+
+
+def validate_lexicon_container(
+    data: Mapping[str, Any],
+    *,
+    strict_schema: bool = False,
+    strict_relations: bool = False,
+    require_closed_relations: bool = False,
+) -> Dict[str, Any]:
+    report = collect_lexicon_validation_report(
+        data,
+        strict_schema=strict_schema,
+        strict_relations=strict_relations,
+        require_closed_relations=require_closed_relations,
+    )
+    _raise_for_validation_errors(report)
+    return report
+
+
+def collect_raw_lexicon_validation_report(
+    data: Mapping[str, Any],
+    *,
+    strict_schema: bool = False,
+    strict_relations: bool = False,
+    require_closed_relations: bool = False,
+) -> Dict[str, Any]:
+    report = _new_validation_report()
+    if not isinstance(data, Mapping):
+        _add_validation_issue(report, "errors", "raw lexicon container must be a mapping")
+        return _finalize_validation_report(report)
+
+    if strict_schema:
+        required_top_level = ("meta", "concepts", "slot_frames", "lexical_entries")
+        for field in required_top_level:
+            if field not in data:
+                _add_validation_issue(report, "errors", f"strict schema mode requires top-level field {field!r}")
+
+    lexical_entries = data.get("lexical_entries")
+    if lexical_entries is not None:
+        if not isinstance(lexical_entries, Mapping):
+            _add_validation_issue(report, "errors", "lexical_entries must be a mapping")
+        else:
+            for key, raw_entry in lexical_entries.items():
+                entry_key = str(key)
+                label = f"lexical_entries[{entry_key!r}]"
+                if not isinstance(raw_entry, Mapping):
+                    _add_validation_issue(report, "errors", f"{label}: entry must be a mapping")
+                    continue
+                entry_id = _to_optional_str(raw_entry.get("id"))
+                lemma = _to_optional_str(raw_entry.get("lemma"))
+                if strict_schema and not entry_id:
+                    _add_validation_issue(report, "errors", f"{label}: strict schema mode requires id")
+                if strict_schema and not lemma:
+                    _add_validation_issue(report, "errors", f"{label}: strict schema mode requires lemma")
+                if entry_id and entry_id != entry_key:
+                    _add_validation_issue(report, "errors", f"{label}: id must match the mapping key")
+                if raw_entry.get("surface_forms") is not None and not isinstance(raw_entry.get("surface_forms"), list):
+                    _add_validation_issue(report, "errors", f"{label}: surface_forms must be a list when provided")
+                if raw_entry.get("senses") is not None and not isinstance(raw_entry.get("senses"), list):
+                    _add_validation_issue(report, "errors", f"{label}: senses must be a list when provided")
+    elif "entries" not in data:
+        _add_validation_issue(report, "errors", "raw lexicon container must include either lexical_entries or entries")
+
+    normalized_report = collect_lexicon_validation_report(
+        normalize_lexicon_container(data),
+        strict_schema=strict_schema,
+        strict_relations=strict_relations,
+        require_closed_relations=require_closed_relations,
+    )
+    for level in ("errors", "warnings"):
+        for message in normalized_report.get(level, []):
+            _add_validation_issue(report, level, message)
+    return _finalize_validation_report(report)
+
+
+def validate_raw_lexicon_container(
+    data: Mapping[str, Any],
+    *,
+    strict_schema: bool = False,
+    strict_relations: bool = False,
+    require_closed_relations: bool = False,
+) -> Dict[str, Any]:
+    report = collect_raw_lexicon_validation_report(
+        data,
+        strict_schema=strict_schema,
+        strict_relations=strict_relations,
+        require_closed_relations=require_closed_relations,
+    )
+    _raise_for_validation_errors(report, prefix="Raw lexicon validation failed")
+    return report
 
 
 def load_json_lexicon_container(path: str | Path) -> Dict[str, Any]:
@@ -699,6 +1498,9 @@ def load_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
 
     meta_blob = read_bytes_with_len(buf)
     meta = json.loads(meta_blob.decode("utf-8"))
+    top_level_extras = meta.pop(TOP_LEVEL_BINARY_META_KEY, {})
+    if not isinstance(top_level_extras, Mapping):
+        top_level_extras = {}
 
     string_table = decode_string_table(buf)
 
@@ -718,7 +1520,7 @@ def load_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
         progress.update()
     progress.close()
 
-    return normalize_lexicon_container({"meta": meta, "entries": entries})
+    return normalize_lexicon_container({"meta": meta, "entries": entries, **dict(top_level_extras)})
 
 
 class IndexedLSDLexicon(Mapping[str, Dict[str, Any]]):
@@ -836,7 +1638,11 @@ def load_indexed_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
             entries[key] = lex[key]
             progress.update()
         progress.close()
-        return normalize_lexicon_container({"meta": lex.meta, "entries": entries})
+        meta = lex.meta
+        top_level_extras = meta.pop(TOP_LEVEL_BINARY_META_KEY, {})
+        if not isinstance(top_level_extras, Mapping):
+            top_level_extras = {}
+        return normalize_lexicon_container({"meta": meta, "entries": entries, **dict(top_level_extras)})
 
 
 def load_lexicon_container(path: str | Path) -> Dict[str, Any]:
@@ -863,11 +1669,98 @@ def open_indexed_lexicon(path: str | Path) -> IndexedLSDLexicon:
     return IndexedLSDLexicon(path)
 
 
+def export_entries_lexicon_container(data: Mapping[str, Any]) -> Dict[str, Any]:
+    container = normalize_lexicon_container(data)
+    validate_lexicon_container(container, strict_schema=False)
+    exported = {
+        "meta": dict(container.get("meta", {})),
+        "entries": dict(container.get("entries", {})),
+        "indexes": dict(container.get("indexes", {})),
+    }
+    if isinstance(container.get("concepts"), Mapping):
+        exported["concepts"] = dict(container.get("concepts", {}))
+    if isinstance(container.get("slot_frames"), Mapping):
+        exported["slot_frames"] = dict(container.get("slot_frames", {}))
+    for key, value in container.items():
+        if key not in {"meta", "entries", "indexes", "lexicon", "lexical_entries", "concepts", "slot_frames"}:
+            exported[str(key)] = value
+    return exported
+
+
+def export_lexical_entries_lexicon_container(data: Mapping[str, Any]) -> Dict[str, Any]:
+    container = normalize_lexicon_container(data)
+    validate_lexicon_container(container, strict_schema=False)
+
+    lexical_entries: Dict[str, Dict[str, Any]] = {}
+    for key, raw_entry in dict(container.get("entries", {})).items():
+        entry_key = str(key)
+        entry = _canonicalize_entry(entry_key, raw_entry)
+        lemma = _to_optional_str(entry.get("lemma", entry.get("word", entry_key))) or entry_key
+        entry_id = _to_optional_str(entry.get("id")) or f"lex:{lemma}"
+
+        exported_entry: Dict[str, Any] = {
+            "id": entry_id,
+            "lemma": lemma,
+            "surface_forms": _canonicalize_surface_forms(entry.get("surface_forms", []), lemma),
+            "grammar": _canonicalize_grammar(entry.get("grammar", {})),
+            "senses": _canonicalize_senses(entry.get("senses", [])),
+            "style_tags": _to_str_list(entry.get("style_tags", [])),
+            "frequency": _to_float(entry.get("frequency", 0.0), 0.0),
+            "meta": dict(entry.get("meta", {})) if isinstance(entry.get("meta", {}), Mapping) else {},
+        }
+
+        reading = _to_optional_str(entry.get("reading"))
+        if reading is not None:
+            exported_entry["reading"] = reading
+
+        slot_frame_id = _to_optional_str(entry.get("slot_frame_id"))
+        if slot_frame_id is not None:
+            exported_entry["slot_frame_id"] = slot_frame_id
+
+        concept_ids = _unique_keep_order(_to_str_list(entry.get("concept_ids", [])))
+        if concept_ids:
+            exported_entry["concept_ids"] = concept_ids
+
+        for field in ("category", "hierarchy", "vector", "slots", "relations"):
+            value = entry.get(field)
+            if value not in (None, [], {}):
+                exported_entry[field] = value
+            elif field in {"slots", "relations"} and isinstance(value, list):
+                exported_entry[field] = list(value)
+            elif field == "vector" and isinstance(value, Mapping):
+                exported_entry[field] = dict(value)
+
+        for field in ("word", "lemma", "id", "surface_forms", "grammar", "senses", "style_tags", "frequency", "meta", "reading", "slot_frame_id", "concept_ids"):
+            entry.pop(field, None)
+        for field in ("category", "hierarchy", "vector", "slots", "relations"):
+            entry.pop(field, None)
+        exported_entry.update(entry)
+        lexical_entries[entry_id] = exported_entry
+
+    exported: Dict[str, Any] = {
+        "meta": dict(container.get("meta", {})),
+        "concepts": dict(container.get("concepts", {})) if isinstance(container.get("concepts"), Mapping) else {},
+        "slot_frames": dict(container.get("slot_frames", {})) if isinstance(container.get("slot_frames"), Mapping) else {},
+        "lexical_entries": lexical_entries,
+        "indexes": dict(container.get("indexes", {})),
+    }
+    for key, value in container.items():
+        if key not in {"meta", "entries", "indexes", "lexicon", "lexical_entries", "concepts", "slot_frames"}:
+            exported[str(key)] = value
+    return exported
+
+
+def export_hierarchical_lexicon_container(data: Mapping[str, Any]) -> Dict[str, Any]:
+    container = normalize_lexicon_container(data)
+    validate_lexicon_container(container, strict_schema=False)
+    exported = dict(container)
+    exported.pop("entries", None)
+    return exported
+
+
 def save_json_lexicon_container(path: str | Path, data: Dict[str, Any]) -> None:
     path = Path(path)
-    container = normalize_lexicon_container(data)
-    save_obj = dict(container)
-    save_obj.pop("entries", None)
+    save_obj = export_hierarchical_lexicon_container(data)
     with path.open("w", encoding="utf-8") as f:
         json.dump(save_obj, f, ensure_ascii=False, indent=2)
 
@@ -886,8 +1779,18 @@ def _extract_binary_payload_fields(entry: Dict[str, Any]) -> tuple[str, str, Dic
 
 def save_lsd_lexicon_container(path: str | Path, data: Dict[str, Any], compress_level: int = 9) -> None:
     container = normalize_lexicon_container(data)
+    validate_lexicon_container(container, strict_schema=False)
     meta = dict(container.get("meta", {}))
     entries: Dict[str, Any] = dict(container.get("entries", {}))
+    top_level_extras = {
+        str(key): value
+        for key, value in container.items()
+        if key not in {"meta", "entries", "indexes", "lexicon"}
+    }
+    if top_level_extras:
+        meta[TOP_LEVEL_BINARY_META_KEY] = top_level_extras
+    else:
+        meta.pop(TOP_LEVEL_BINARY_META_KEY, None)
     semantic_axes: List[str] = list(meta.get("semantic_axes", []))
     grammar_axes: List[str] = list(meta.get("grammar_axes", []))
 
@@ -966,8 +1869,18 @@ def save_lsd_lexicon_container(path: str | Path, data: Dict[str, Any], compress_
 
 def save_indexed_lsd_lexicon_container(path: str | Path, data: Dict[str, Any]) -> None:
     container = normalize_lexicon_container(data)
+    validate_lexicon_container(container, strict_schema=False)
     meta = dict(container.get("meta", {}))
     entries: Dict[str, Any] = dict(container.get("entries", {}))
+    top_level_extras = {
+        str(key): value
+        for key, value in container.items()
+        if key not in {"meta", "entries", "indexes", "lexicon"}
+    }
+    if top_level_extras:
+        meta[TOP_LEVEL_BINARY_META_KEY] = top_level_extras
+    else:
+        meta.pop(TOP_LEVEL_BINARY_META_KEY, None)
     semantic_axes: List[str] = list(meta.get("semantic_axes", []))
     if not semantic_axes:
         _ensure_meta({"meta": meta}, entries)

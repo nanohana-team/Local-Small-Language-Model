@@ -1,391 +1,350 @@
 # LSLM v4 実装計画
 
-## 0. 本書の役割
+## 1. この文書の役割
 
-本書は、LSLM v4 を破綻しにくい順序で実装するための計画書である。  
-思想の定義は `philosophy.md`、保存先の境界は `knowledge_boundaries.md` に委譲し、本書では **実装順序・依存関係・完了条件** に集中する。
-
-本書の目的は、
-
-- 何から着手するべきか
-- 何を後回しにするべきか
-- どこまでできたら次へ進んでよいか
-
-を明確にすることである。
+本書は、LSLM v4 を **壊れにくい順番で実装するための計画書** です。  
+「作れそうなものから作る」のではなく、後戻りコストが低く、責務分離を崩しにくい順番を定義します。
 
 ---
 
-## 1. 実装方針の結論
+## 2. 実装方針の結論
 
-LSLM v4 の初期実装は、次の順で進める。
+v4 は次の順序で進めるのが最適です。
 
-1. 契約を固定する
-2. 辞書を最小成立させる
-3. 辞書 I/O を安定化する
-4. ログとトレースを常設する
-5. Plan を実装する
-6. Divergence / Convergence を実装する
-7. Slot / Surface を実装する
-8. 最小縦スライスを成立させる
-9. 段階別スコアを導入する
-10. 報酬と evaluator を接続する
-11. 辞書還元ループを整備する
+1. 文書とスキーマを固定する
+2. 辞書基盤を完成させる
+3. relation 基盤を完成させる
+4. ログ基盤を常設する
+5. Plan を最小実装する
+6. Divergence / Convergence を通す
+7. Slot / Surface を通す
+8. 内部評価を入れる
+9. 外部 evaluator を補助的に接続する
+10. 学習ループを閉じる
 
-要するに、**先に観測可能な骨格を作り、その上に学習を載せる**。  
-これが v4 の最適順序である。
+理由は単純で、**辞書・relation・観測・責務分離がない状態で学習へ進むと、何が悪かったのか分からなくなる** からです。
 
 ---
 
-## 2. 実装の大原則
+## 3. 現在の前提資産
 
-### 2.1 Surface を先に作り込まない
-自然な文を早く出したくても、Surface を先に厚くすると中身が空洞になる。  
-まず Plan から Slot までの骨格を作る。
-
-### 2.2 ログを後回しにしない
-観測できない状態でパイプラインを伸ばすと、壊れた時に戻れなくなる。  
-ログは最初期から常設する。
-
-### 2.3 reward を急がない
-内部状態が見えない段階で reward を入れても、良し悪しの原因が不明になる。  
-最小縦スライス成立後に入れる。
-
-### 2.4 辞書仕様を先に固める
-辞書が曖昧なまま各段階を作ると、後で全部がずれる。  
-辞書は最小でも先に固定する。
-
----
-
-## 3. フェーズ構成
-
-## Phase 0. 契約固定
-
-### 目的
-全モジュールの入出力契約を先に確定し、後工程での破綻を防ぐ。
-
-### 必須成果物
-
-- 辞書エントリ構造
-- 実行時 State 構造
-- InputFeatures
-- IntentPlan
-- DivergenceCandidate
-- ConvergenceCandidate
-- SlotFrame / FilledSlots
-- SurfacePlan
-- ResponseResult
-- Trace Record
-- Reward Record
-
-### 完了条件
-
-- dataclass または schema として定義済み
-- 各モジュール間の受け渡しが文章だけでなく型として固定されている
-- 命名が一貫している
-
----
-
-## Phase 1. 辞書最小成立
-
-### 目的
-知識ネットワークとしての辞書を、最小語彙で成立させる。
-
-### 必須要素
-
-- Axis
-- Grammar
-- Slot
-- Relation
-- Meta / Index
-
-### 成果物
-
-- 最小辞書ソース
-- バリデーション可能な辞書形式
-- 変換対象としての中間表現
-
-### 完了条件
-
-- 少数語彙でもネットワーク参照が成立する
-- Relation が実際に候補探索へ使える
-- Slot と Grammar が辞書側に存在する
-
----
-
-## Phase 2. 辞書 I/O 安定化
-
-### 目的
-辞書をロード・変換・参照できる状態にする。
-
-### 実装対象
-
-- 辞書ソース → 実行用辞書形式の変換
-- 実行用辞書のロード
-- index 生成
-- validation
-- build report 出力
-
-### 既存資産との関係
+v4 で既に持っている資産:
 
 - `src/core/io/lsd_lexicon.py`
 - `tools/convert_dict_to_binary.py`
+- `settings/LLM_order.yaml`
+- `docs/*.md`
 
-はこのフェーズの核として扱う。
-
-### 完了条件
-
-- 辞書が安定してロードできる
-- 必須セクション不足時に明確なエラーが出る
-- 読み込み結果をテストで検証できる
+このため、v4 の出発点は「空」ではありません。  
+**辞書基盤と設計仕様は先にある** ので、そこを軸に縦へ通すのが正解です。
 
 ---
 
-## Phase 3. ログ・トレース常設
+## 4. フェーズ分割
+
+## Phase 0: 仕様固定
 
 ### 目的
-Plan 以降の全段階を追跡可能にする。
 
-### 実装対象
+後で責務が混線しないように、最上位仕様を先に確定する。
 
-- `latest.log`
-- `debug.log`
-- `latest.jsonl`
-- 起動時ローテート
-- warnings / exceptions 集約
+### 作業
+
+- README 更新
+- architecture 更新
+- docs 再編
+- relation 定義の明文化
+- 辞書スキーマの明文化
+- 境界設計の明文化
 
 ### 完了条件
 
-- 1 入力ごとに 1 トレースが残る
-- 例外時にも原因が追える
-- 主要ステージの所要時間が取得できる
-
-### 依存
-Phase 0 完了後なら開始可能。  
-Plan 実装前に終えておくことが望ましい。
+- docs の役割分担が明確
+- concept / lexical entry / sense / relation の定義が固定
+- 辞書・実行時・保存・設定の境界が固定
 
 ---
 
-## Phase 4. Plan v1
+## Phase 1: 辞書基盤の完成
 
 ### 目的
-入力から応答方針を決める。
 
-### 初期対象
+辞書ネットワークを、読み書き・正規化・変換の面で安定化する。
 
-- 質問応答
-- 説明
-- 確認
-- 雑談の基本応答
+### 作業
 
-### 最低限返すもの
-
-- `intent`
-- `required_slots`
-- `response_mode`
-- `constraints`
-- `fallback_policy`
+- 現行 entry 形式のバリデーション強化
+- `senses` / `concept_ids` 互換拡張
+- `slot_frame` の表現追加
+- `indexes` の拡張方針確定
+- LSD / LSDX 互換性維持
 
 ### 完了条件
 
-- どの入力にも最低限の Plan が返る
-- フォールバック時も空では終わらない
-- Plan 結果がトレースへ残る
+- JSON / LSD / LSDX の相互変換が安定
+- 互換 entry 形式から target schema への橋渡しが定義済み
+- 最低限の concept 参照を辞書上で持てる
 
 ---
 
-## Phase 5. Divergence / Convergence v1
+## Phase 2: relation 基盤の完成
 
 ### 目的
-知識ネットワーク上で候補を広げ、必要要素へ絞り込む。
 
-### Divergence の実装対象
+relation を辞書の補助情報ではなく、中核接続規則として安定化する。
 
-- 起点抽出
+### 作業
+
+- relation schema の正式化
+- relation taxonomy の固定
+- relation index の追加
+- inverse 規約の固定
+- closed graph validation の実装
+- import review からの relation 昇格フロー定義
+
+### 完了条件
+
+- relation type / direction / usage_stage が明確
+- dangling relation を strict mode で禁止できる
+- relation by type / target の索引が安定
+- 外部由来 relation を review 経由で昇格できる
+
+---
+
+## Phase 3: ログ基盤の常設
+
+### 目的
+
+後工程の分析と学習のために、観測を先に成立させる。
+
+### 作業
+
+- runtime log 設計
+- trace jsonl 設計
+- turn_id / session_id 規約
+- explored path / accepted path の分離
+- 例外・warning の集約
+- timing 計測
+
+### 完了条件
+
+- 1 入力 = 1 trace が確実に残る
+- 中間段階を欠落なく追跡できる
+- ログを見れば失敗箇所の当たりが付く
+
+---
+
+## Phase 4: Plan v1
+
+### 目的
+
+入力から応答方針を決める最小層を作る。
+
+### 作業
+
+- 発話タイプ分類
+- intent 決定
+- required_slots 決定
+- relation type priority の初期決定
+- fallback plan 定義
+
+### 完了条件
+
+- どんな入力にも最低限の plan が返る
+- 入力に対し plan が空にならない
+- Slot 側が plan を参照できる
+
+---
+
+## Phase 5: Divergence / Convergence v1
+
+### 目的
+
+辞書ネットワークを実際に思考へ使い始める。
+
+### 作業
+
+- 起点語抽出
 - relation 展開
+- relation priority 適用
+- depth / branching budget 適用
 - axis 近傍探索
-- カテゴリ制約付き追加
-
-### Convergence の実装対象
-
-- plan 適合度評価
-- 入力との関係性評価
-- 冗長候補の削減
-- 矛盾候補の除外
-- 棄却理由の記録
+- category / hierarchy 制約
+- 候補採用 / 棄却の初期 scoring
 
 ### 完了条件
 
-- 複数候補が安定して生成される
-- 採用と棄却の理由が残る
-- 失敗時も「候補不足」か「絞り込み失敗」か区別できる
+- 発散候補が複数安定生成される
+- 収束で採用候補が説明可能に選ばれる
+- relation path が trace に残る
+- 発散と収束が relation 操作として説明できる
 
 ---
 
-## Phase 6. Slot / Surface v1
+## Phase 6: Slot / Surface v1
 
 ### 目的
-意味構造を確定し、日本語へ変換する。
 
-### Slot の実装対象
+意味骨格から最終応答までを最短で通す。
 
-- actor
-- target
-- state
-- time
-- cause
-- location
-- optional modifiers
+### 作業
 
-### Surface の実装対象
-
-- テンプレートまたは規則ベース表層化
-- grammar 制約チェック
-- 最低限の自然さ補正
+- slot frame 決定
+- predicate-slot relation の参照
+- 必須 slot 充填
+- 未充填 slot の可視化
+- テンプレートベース表層化
+- 文体調整
 
 ### 完了条件
 
-- filled slots から文を生成できる
-- 文法違反の明確な検出点がある
-- Surface が Plan や Divergence を内包しない
+- 短文会話で意味破綻の少ない応答が出る
+- slot と表層の責務が分離されている
+- Surface が新規意味を足していない
 
 ---
 
-## Phase 7. 最小縦スライス成立
+## Phase 7: 内部評価
 
 ### 目的
-1 本の入力が、Plan から Response まで最後まで流れる状態を作る。
 
-### MVP の定義
+学習前に、構造の良し悪しを内部から測れるようにする。
 
-- 小規模辞書でよい
-- 質問 3〜5 種類に答えられればよい
-- 高度な自然さは不要
-- ただし各段階は必ず観測可能であること
-
-### 完了条件
-
-- CLI から入力して出力まで通る
-- 失敗時に失敗段階が特定できる
-- 同じ入力に対して挙動差分を比較できる
-
----
-
-## Phase 8. 段階別スコア導入
-
-### 目的
-報酬導入前に、内部構造の良し悪しを段階別に数値化する。
-
-### 初期スコア例
+### 初期評価軸
 
 - plan_fitness
+- relation_coverage
 - divergence_relevance
 - convergence_fitness
+- relation_precision
 - slot_fitness
 - grammar_fitness
 - input_retention
+- dangling_rate
 
 ### 完了条件
 
-- 各ターンで stage scores が保存される
-- 外部 evaluator なしでも改善議論ができる
+- trace に内部 score が残る
+- どの段階が弱いか数値で見える
+- relation 品質の悪化を検知できる
 
 ---
 
-## Phase 9. 報酬と evaluator 接続
+## Phase 8: 外部 evaluator 接続
 
 ### 目的
-内部スコアと外部品質評価を統合し、学習接続の土台を作る。
 
-### 実装対象
+自然さや有用性の信号を補助的に得る。
 
-- `reward.internal`
-- `reward.external`
-- `reward.total`
-- evaluator 呼び出し層
-- feedback 保存
+### 作業
+
+- evaluator adapter 実装
+- `settings/LLM_order.yaml` 参照
+- internal / external の分離保存
+- feedback_text の保存
 
 ### 完了条件
 
-- evaluator なしでも動く
-- evaluator ありで external を追加できる
-- 保存形式が固定される
+- evaluator 不在でも動く
+- evaluator ありなら external score を追加取得できる
+- 外部評価が中核ロジックを侵食しない
 
 ---
 
-## Phase 10. 辞書還元ループ
+## Phase 9: 学習ループ閉鎖
 
 ### 目的
-保存された結果を、辞書改善や設定調整へ還元できるようにする。
 
-### 実装対象
+辞書改善・方針更新・比較実験を回せる状態にする。
 
-- 失敗パターン抽出
-- relation 補強候補抽出
-- grammar 例外候補抽出
-- slot 不足分析
-- 設定再調整の補助
+### 作業
+
+- episode record 保存
+- 採用 / 棄却の理由保存
+- 改善候補抽出
+- unknown word の辞書昇格フロー
+- relation 昇格・降格フロー
+- benchmark 回帰確認
 
 ### 完了条件
 
-- ログとトレースから改善候補を機械的に拾える
-- 一時状態をそのまま辞書へ入れず、検証プロセスを挟める
+- 何を変えたら何が良くなったか追跡できる
+- 辞書改善とモデル改善が分離されている
 
 ---
 
-## 4. 着手禁止の順序
+## 5. 最初の縦スライス
 
-以下の順序は避ける。
+v4 の最初の完成形は、豪華である必要はありません。  
+以下が通れば十分です。
 
-### 4.1 Surface 先行
-表面だけ自然でも中身が追えず、後で壊れる。
+1. 入力を受け取る
+2. Plan を作る
+3. relation priority を決める
+4. 辞書から relation をたどって候補を広げる
+5. relation を絞って候補を残す
+6. slot を埋める
+7. 1〜3 文で返す
+8. trace を残す
 
-### 4.2 reward 先行
-内部観測が未整備なまま学習すると、原因分析不能になる。
-
-### 4.3 evaluator 依存先行
-外部モデル評価に寄りすぎると、v4 本体の弱点が隠れる。
-
-### 4.4 辞書後回し
-辞書が曖昧だと、Plan 以降の全段階が再設計になる。
-
----
-
-## 5. 初期マイルストーン
-
-### M1. 辞書が読める
-最小辞書をロードし、必要セクションを参照できる。
-
-### M2. 1 ターン 1 トレースが残る
-入力に対して構造化ログが常に出る。
-
-### M3. Plan → Surface が最後まで通る
-小規模入力で縦スライスが成立する。
-
-### M4. stage scores が計算できる
-外部 evaluator なしでも内部改善が始められる。
-
-### M5. reward と feedback が残る
-学習接続へ進める土台が完成する。
+この最小縦スライスが通る前に、複雑な学習や高度な会話履歴へ進まないことが重要です。
 
 ---
 
-## 6. 完了の判断基準
+## 6. 優先度の判断基準
 
-v4 初期実装は、次の条件を満たした時点で「成立」と判断する。
+新規タスクの優先順位は、次の順で判断します。
 
-- 契約が固定されている
-- 辞書 I/O が安定している
-- Plan / Divergence / Convergence / Slot / Surface が分離されている
-- 1 ターン 1 トレースで内部状態が見える
-- stage scores をもとに改善議論ができる
-- reward は後付け可能な位置に置かれている
+1. 境界を守るか
+2. relation 品質を守るか
+3. 観測可能性を上げるか
+4. 辞書中心性を強めるか
+5. 最小縦スライスを通すか
+6. 品質改善に寄与するか
+7. コスト増を抑えられるか
+
+この順番を逆にすると、短期的には動いても後で壊れます。
 
 ---
 
-## 7. 結論
+## 7. やってはいけない順序
 
-LSLM v4 の実装は、機能を増やす競争ではない。  
-**壊れにくい順に、観測可能な骨格を作ること** が最重要である。
+- 先に RL を始める
+- 先に長文生成へ広げる
+- 先に会話履歴を肥大化させる
+- 先に外部 LLM 依存を深くする
+- 先に Surface を賢くする
+- 先に relation を曖昧なまま増やす
 
-辞書を最小成立させ、I/O を安定化し、ログを常設し、その上で Plan から Surface までを縦に通す。  
-この順序を守る限り、v4 は後から強くできる。
+理由は、どれも **内部構造が未固定のまま外側だけ派手になる** からです。
+
+---
+
+## 8. 現時点の次手
+
+現行リポジトリから見た、最も自然な次手は次です。
+
+1. relation schema のコード化
+2. relation closed-graph validation
+3. relation index の追加
+4. trace 設計のコード化
+5. Plan v1 の実装
+6. Divergence / Convergence の最小接続
+
+この順序なら、既存資産を最大限活かしながら v4 の中核へ入れます。
+
+---
+
+## 9. 結論
+
+v4 の実装計画は、
+**辞書 → relation → 観測 → Plan → 発散収束 → Slot / Surface → 評価 → 学習** の順が最適です。
+
+この順番は地味ですが、
+
+- 後戻りが少ない
+- 失敗箇所が分かる
+- relation 中心思想を守れる
+- 低資源設計を維持できる
+
+という意味で、最も壊れにくい進め方です。

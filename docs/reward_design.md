@@ -1,65 +1,18 @@
-# LSLM v4 報酬設計
+# LSLM v4 報酬・評価設計
 
-## 0. 本書の役割
+## 1. この文書の役割
 
-本書は、LSLM v4 における内部スコア、外部評価、統合報酬の設計を定義する。  
-目的は、最終文章だけを雑に採点するのではなく、**知識ネットワーク上での思考過程を段階別に観測し、その上で学習へ接続できる形を作ること** にある。
+本書は、LSLM v4 における評価と報酬の設計方針を定義します。  
+v4 では、最終出力だけを 1 つの点数で殴る設計を避けます。  
+理由は、v4 が **段階別に観測・改善する思想** を持つからです。
 
-本書が扱うのは以下である。
-
-- stage scores
-- `reward.internal`
-- `reward.external`
-- `reward.total`
-- evaluator 接続方針
-- 保存形式
-
-詳細なログ出力先やローテートは `logging.md` に委譲する。
+relation を中核に置く以上、評価も relation の質を見なければなりません。
 
 ---
 
-## 1. 前提
+## 2. 先に結論
 
-LSLM v4 は、単一のブラックボックス報酬に依存しない。  
-推論は少なくとも次の段階へ分割される。
-
-- Plan
-- Divergence
-- Convergence
-- Slot
-- Surface
-- Response
-
-また、辞書は知識ネットワークそのものであり、学習対象は「最終文の見た目」だけではない。  
-何を広げ、何を捨て、何を採用し、どう文にしたかを含めて評価する必要がある。
-
----
-
-## 2. 評価の 3 層構造
-
-v4 の評価は、次の 3 層に分ける。
-
-1. **stage scores**
-2. **reward.internal**
-3. **reward.external / reward.total**
-
-### 2.1 stage scores
-各段階の内部的な健全性を個別に評価する値。  
-これは最も細かい観測単位であり、デバッグと改善の基礎になる。
-
-### 2.2 reward.internal
-stage scores を集約して得る内部報酬。  
-外部 evaluator なしでも算出できる。
-
-### 2.3 reward.external / reward.total
-外部評価器の信号を加えた報酬。  
-学習更新や候補選択に使う最終値は `reward.total` である。
-
----
-
-## 3. 設計方針の結論
-
-報酬は最低でも次の形で保持する。
+v4 の報酬は、少なくとも次の 3 系統に分けます。
 
 ```python
 reward = {
@@ -69,156 +22,133 @@ reward = {
 }
 ```
 
-さらに、集約前の情報として stage scores を別に保持する。
-
-```python
-scores = {
-    "plan_fitness": 0.0,
-    "divergence_relevance": 0.0,
-    "convergence_fitness": 0.0,
-    "slot_fitness": 0.0,
-    "surface_fitness": 0.0,
-    "grammar_fitness": 0.0,
-    "input_retention": 0.0,
-}
-```
-
-この分離により、
-
-- どの段階が壊れているか
-- 内部構造は良いのに外部品質が低いのか
-- 表現は良いが構造が壊れているのか
-
-を切り分けられる。
+- `internal`  
+  内部構造としてどれだけ健全か
+- `external`  
+  人間から見た応答品質がどれだけ高いか
+- `total`  
+  学習更新や候補比較に使う統合値
 
 ---
 
-## 4. stage scores
+## 3. なぜ分けるのか
 
-### 4.1 目的
-stage scores は、各段階を個別に観測・比較・改善するための局所指標である。  
-初期段階では、まずここを整える。
+### 3.1 思想整合性のため
 
-### 4.2 初期採用候補
+v4 は Plan / Divergence / Convergence / Slot / Surface を分離します。  
+それなのに評価だけ 1 つへ潰すと、思想と矛盾します。
 
-#### `plan_fitness`
-入力に対して適切な intent と required slots を立てられているか。
+### 3.2 デバッグ性のため
 
-#### `divergence_relevance`
-候補群が入力と plan に対して十分に関連しているか。
+- 内部構造は良いが表層が弱い
+- 表層は自然だが slot が崩れている
+- relation は多いが発散がズレている
+- relation は少ないが slot は埋まっている
 
-#### `convergence_fitness`
-必要候補を残し、不要候補を落とせているか。
+を分けて扱えるようになります。
 
-#### `slot_fitness`
-必要スロットがどれだけ埋まり、矛盾なく構造化されているか。
+### 3.3 学習工学上のため
 
-#### `surface_fitness`
-意味構造を応答として読める形へ落とし込めているか。
-
-#### `grammar_fitness`
-文法制約違反が少なく、接続が自然か。
-
-#### `input_retention`
-ユーザー入力の主要要素を不当に失っていないか。
-
-### 4.3 性質
-
-- 0.0〜1.0 に正規化する
-- evaluator 不要で計算できる形を優先する
-- 閾値や重みは設定へ逃がす
+`internal` は安定しやすく、`external` は表現力が高い代わりに揺れやすいです。  
+この性質差を分離して扱う方が合理的です。
 
 ---
 
-## 5. reward.internal
+## 4. internal 評価
 
-### 5.1 役割
-`reward.internal` は、LSLM v4 自身の内部構造がどれだけ健全かを評価する集約報酬である。
+## 4.1 役割
 
-### 5.2 基本式
+`internal` は、LSLM v4 自身の構造的健全性を測る評価です。  
+外部 evaluator がなくても算出できる必要があります。
 
-```python
-reward.internal = (
-    w_plan        * scores["plan_fitness"] +
-    w_divergence  * scores["divergence_relevance"] +
-    w_convergence * scores["convergence_fitness"] +
-    w_slot        * scores["slot_fitness"] +
-    w_surface     * scores["surface_fitness"] +
-    w_grammar     * scores["grammar_fitness"] +
-    w_input       * scores["input_retention"]
-)
-```
+## 4.2 初期評価軸
 
-### 5.3 正規化
+最低限、次の軸を推奨します。
 
-```python
-reward.internal = max(0.0, min(1.0, reward.internal))
-```
+- `plan_fitness`
+- `relation_coverage`
+- `divergence_relevance`
+- `convergence_fitness`
+- `relation_precision`
+- `slot_fitness`
+- `grammar_fitness`
+- `input_retention`
+- `latency_fitness`
+- `dangling_rate`
 
-### 5.4 意味
-`reward.internal` は、v4 が「思考エンジンとして正しく動いたか」を測る。  
-これは外部品質より優先して整えるべき基礎信号である。
+### 補足
+
+- `plan_fitness`  
+  入力と応答方針が噛み合っているか
+- `relation_coverage`  
+  必要な接続を辞書が十分持っているか
+- `divergence_relevance`  
+  発散候補が主題からズレすぎていないか
+- `convergence_fitness`  
+  必要要素へ正しく絞り込めているか
+- `relation_precision`  
+  採用した relation が goal にどれだけ寄与しているか
+- `slot_fitness`  
+  必須 slot が埋まり、矛盾が少ないか
+- `grammar_fitness`  
+  接続制約や文法面で崩れていないか
+- `input_retention`  
+  入力の重要点を落としていないか
+- `latency_fitness`  
+  低遅延制約を大きく破っていないか
+- `dangling_rate`  
+  参照不能 relation や無効 relation がどれだけ混じっているか
 
 ---
 
-## 6. reward.external
+## 5. external 評価
 
-### 6.1 役割
-`reward.external` は、外部 evaluator による品質評価を数値化した報酬である。  
-自然さ、有用性、一貫性、妥当性など、人間視点に近い信号を補うために使う。
+## 5.1 役割
 
-### 6.2 evaluator の位置づけ
-外部 evaluator は補助であり、v4 本体の代替ではない。  
-外部評価が高くても内部構造が壊れていれば、それは本質的改善ではない。
+`external` は、外部 evaluator が見た最終応答品質です。  
+主に次を補います。
 
-### 6.3 初期入力
-初期段階では、evaluator へ渡す材料を絞る。
+- 自然さ
+- 有用性
+- 一貫性
+- 応答としての納得感
+- 共感や言い回しの適切さ
+
+## 5.2 evaluator の位置づけ
+
+外部 evaluator は **補助輪** です。  
+中核ロジックの代替ではありません。
+
+想定例:
+
+- Gemini
+- OpenAI
+- ローカル evaluator
+
+## 5.3 入力材料
+
+初期段階では、次を evaluator へ渡せば十分です。
 
 - `user_input`
 - `plan` の要約
+- `accepted_relations` の要約
 - `filled_slots` の要約
 - `final_response`
-- 必要最小限のメタデータ
 
-### 6.4 初期出力
-
-```python
-external_feedback = {
-    "score": 0.0,
-    "label": "",
-    "feedback_text": "",
-}
-```
-
-### 6.5 正規化
-
-```python
-reward.external = max(0.0, min(1.0, external_feedback["score"]))
-```
+中間状態を全部投げる必要はありません。  
+まずは「応答品質の補助評価器」として使います。
 
 ---
 
-## 7. reward.total
+## 6. total の定義
 
-### 7.1 役割
-`reward.total` は、候補選択や学習更新に使う最終統合報酬である。
-
-### 7.2 基本式
+`total` は、学習更新や候補選択に使う最終値です。
 
 ```python
-reward.total = (
-    alpha * reward.internal +
-    beta  * reward.external
-)
+reward.total = alpha * reward.internal + beta * reward.external
 ```
 
-制約:
-
-```python
-alpha + beta = 1.0
-```
-
-### 7.3 推奨初期値
+初期推奨:
 
 ```python
 alpha = 0.8
@@ -227,103 +157,135 @@ beta = 0.2
 
 理由:
 
-- 初期段階では内部構造の安定性を重視したい
-- external は有益だが揺れやすい
-- v4 の思想上、内部可視性を失ってはならない
+- まず内部構造を安定させたい
+- 外部評価ノイズを過信しない
+- 低資源・高再現性の思想に合う
 
 ---
 
-## 8. フェーズ別導入順序
+## 7. 保存形式
 
-### Phase A. stage scores のみ
-まずは内部局所指標だけを出す。  
-この段階では学習更新を急がない。
-
-### Phase B. reward.internal 導入
-stage scores を集約し、候補比較や実験比較に使える形にする。
-
-### Phase C. reward.external 導入
-外部 evaluator を接続し、最終品質の信号を追加する。
-
-### Phase D. reward.total で統合
-内部と外部を統合し、学習や候補選択へ利用する。
-
-この順序を逆転させない。  
-external 先行は原因分析を難しくする。
-
----
-
-## 9. 保存形式
-
-各ターンで最低限以下を保存できるようにする。
+trace や learning record には、少なくとも次を残します。
 
 ```json
 {
-  "turn_id": "20260408_194210_0001",
   "scores": {
-    "plan_fitness": 0.0,
-    "divergence_relevance": 0.0,
-    "convergence_fitness": 0.0,
-    "slot_fitness": 0.0,
-    "surface_fitness": 0.0,
-    "grammar_fitness": 0.0,
-    "input_retention": 0.0
+    "plan_fitness": 0.82,
+    "relation_coverage": 0.79,
+    "divergence_relevance": 0.74,
+    "convergence_fitness": 0.78,
+    "relation_precision": 0.83,
+    "slot_fitness": 0.91,
+    "grammar_fitness": 0.88,
+    "input_retention": 0.84,
+    "latency_fitness": 0.95,
+    "dangling_rate": 0.00
   },
   "reward": {
-    "internal": 0.0,
-    "external": 0.0,
-    "total": 0.0
+    "internal": 0.84,
+    "external": 0.76,
+    "total": 0.824
   },
-  "external_feedback": {
-    "label": "",
-    "feedback_text": ""
+  "feedback": {
+    "label": "good",
+    "text": "結論は明確だが、理由の補足が少ない"
   }
 }
 ```
 
-`logging.md` で定義するトレースへこの情報を埋め込めるようにする。
+---
+
+## 8. internal の計算例
+
+```python
+reward_internal = (
+    0.15 * plan_fitness +
+    0.15 * relation_coverage +
+    0.10 * divergence_relevance +
+    0.15 * convergence_fitness +
+    0.10 * relation_precision +
+    0.15 * slot_fitness +
+    0.08 * grammar_fitness +
+    0.07 * input_retention +
+    0.03 * latency_fitness +
+    0.02 * (1.0 - dangling_rate)
+)
+```
+
+重みは設定ファイルで差し替えられるようにします。
 
 ---
 
-## 10. 設定へ逃がすべき項目
+## 9. どの段階を学習対象にするか
 
-以下はコード固定ではなく設定で管理する。
+v4 では「最終文章だけ」を学習対象にしません。  
+段階別に改善対象を持てる設計を維持します。
 
-- stage score の重み
-- `alpha`, `beta`
-- clipping の閾値
-- evaluator 利用 on/off
-- evaluator のモデル順序
-- evaluator prompt version
+### 9.1 Plan 改善
 
-これにより再現実験と比較実験をしやすくする。
+- intent のズレ
+- required_slots の不足
+- relation priority のズレ
+
+### 9.2 Divergence 改善
+
+- 候補不足
+- 候補のズレ
+- relation 探索の偏り
+
+### 9.3 Convergence 改善
+
+- 重要候補の取りこぼし
+- 冗長候補の採用
+- 不要 relation の採用
+
+### 9.4 Slot 改善
+
+- 必須 slot の欠落
+- 役割の取り違え
+
+### 9.5 Surface 改善
+
+- 文の不自然さ
+- 冗長さ
+- トーン不一致
+
+---
+
+## 10. 外部 evaluator が使えない場合
+
+外部 evaluator が利用できない場面でも、v4 は止まってはいけません。  
+その場合は次の方針を取ります。
+
+- `external = null` または `0.0`
+- `total = internal` または internal のみで計算
+- fallback reason を trace へ残す
+
+これにより、外部依存の有無でパイプラインが壊れないようにします。
 
 ---
 
 ## 11. やってはいけないこと
 
-### 11.1 最終文だけで採点する
-内部崩壊を見逃す。
-
-### 11.2 external を唯一の正解にする
-v4 本体の説明可能性が失われる。
-
-### 11.3 stage scores を保存しない
-後から何が効いたか検証できなくなる。
-
-### 11.4 一時的な evaluator 反応をそのまま辞書へ入れる
-評価結果はまず保存へ置き、知識抽出は別工程で行う。
+1. 最終応答の印象だけで全てを採点する
+2. external score を絶対視する
+3. internal score を 1 個だけに潰して詳細を捨てる
+4. latency を完全に無視する
+5. relation 品質を見ずに語彙数だけで評価する
+6. reward の重みをコードへ焼き込む
 
 ---
 
 ## 12. 結論
 
-LSLM v4 の報酬設計は、「大きな 1 点」で雑に良し悪しを決める設計ではない。  
-**段階別に観測し、内部で集約し、必要に応じて外部信号を足す** という三層構造で扱う。
+LSLM v4 の報酬設計は、
+**内部構造の健全性と外部から見た品質を分離し、relation 品質を含めて最後に統合する三層構造** が最適です。
 
-- stage scores で壊れた段階を見つける
-- `reward.internal` で内部健全性を集約する
-- `reward.external` で人間品質に近い信号を補う
-- `reward.total` で最終更新値を作る
+この形なら、
 
-この構造を守る限り、v4 の学習は思想と整合したまま前進できる。
+- 学習信号が安定しやすい
+- 失敗原因を切り分けやすい
+- relation 中心思想と矛盾しない
+- 低資源環境でも比較検証しやすい
+
+という v4 の強みを守れます。

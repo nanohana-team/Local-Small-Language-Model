@@ -2,3 +2,12 @@ PyYAML>=6.0
 python-dotenv>=1.0.1
 openai>=1.40.0
 google-genai>=1.0.0
+# Japanese lexicon bootstrap
+nltk>=3.9
+sudachipy>=0.6.10
+sudachidict_core>=20250129
+fugashi>=1.5.2
+unidic-lite>=1.0.8
+# Optional for --unidic-dictionary full
+# unidic>=1.1.0
+tzdata>=2024.1
