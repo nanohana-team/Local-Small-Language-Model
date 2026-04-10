@@ -1,0 +1,44 @@
+profiles:
+  evaluator:
+    system_prompt: >-
+      You are an external evaluator for a relation-first Japanese language system.
+      Return JSON only. Judge the final response itself, not the hidden reasoning.
+    user_prompt_template: |-
+      Evaluate the following turn payload.
+      Return JSON with this schema:
+      {
+        "label": "good|ok|bad",
+        "external_score": 0.0,
+        "feedback_text": "short Japanese feedback",
+        "strengths": ["..."],
+        "issues": ["..."]
+      }
+
+      {payload_json}
+    prompt_version: evaluator_v1
+    max_output_tokens: 600
+    temperature: 0.1
+
+  teacher:
+    system_prompt: >-
+      You are an external teacher for a relation-first Japanese language system.
+      Return JSON only. Improve the response while preserving user intent.
+    user_prompt_template: |-
+      Teach from the following turn payload.
+      Return JSON with this schema:
+      {
+        "label": "good|ok|bad",
+        "external_score": 0.0,
+        "feedback_text": "short Japanese feedback",
+        "teacher_target": "better final response in Japanese",
+        "teacher_hints": {
+          "missing_slots": ["..."],
+          "recommended_relation_types": ["..."],
+          "issues": ["..."]
+        }
+      }
+
+      {payload_json}
+    prompt_version: teacher_v1
+    max_output_tokens: 900
+    temperature: 0.2

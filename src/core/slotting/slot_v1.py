@@ -8,6 +8,15 @@ from src.core.divergence.divergence_v1 import DivergenceResult
 from src.core.planning.plan_v1 import PlanV1
 from src.core.relation.index import RelationIndex
 
+MIN_STRONG_SEED_SCORE = 0.25
+LOW_SIGNAL_CONCEPT_CATEGORIES = {
+    "grammar",
+    "discourse",
+    "prefix",
+    "suffix",
+    "adnominal",
+}
+
 
 @dataclass
 class SlotResult:
@@ -20,9 +29,17 @@ class SlotResult:
         return asdict(self)
 
 
+def _is_low_signal_concept(index: RelationIndex, concept_id: str | None) -> bool:
+    if not concept_id:
+        return False
+    concept = index.get_concept(concept_id) or {}
+    category = str(concept.get("category") or "")
+    return category in LOW_SIGNAL_CONCEPT_CATEGORIES
 
-def _seed_concepts_in_order(divergence: DivergenceResult) -> List[tuple[str, str]]:
-    ordered: List[tuple[str, str]] = []
+
+def _seed_concepts_in_order(divergence: DivergenceResult, index: RelationIndex) -> List[tuple[str, str]]:
+    ordered_all: List[tuple[str, str]] = []
+    ordered_preferred: List[tuple[str, str]] = []
     seen: set[str] = set()
     seen_spans: set[tuple[int, int, str]] = set()
     sorted_matches = sorted(
@@ -35,10 +52,14 @@ def _seed_concepts_in_order(divergence: DivergenceResult) -> List[tuple[str, str
             continue
         seen_spans.add(span_key)
         for concept_id in match.concept_ids[:1]:
-            if concept_id not in seen:
-                seen.add(concept_id)
-                ordered.append((concept_id, match.surface))
-    return ordered
+            if concept_id in seen:
+                continue
+            seen.add(concept_id)
+            pair = (concept_id, match.surface)
+            ordered_all.append(pair)
+            if match.score >= MIN_STRONG_SEED_SCORE and not _is_low_signal_concept(index, concept_id):
+                ordered_preferred.append(pair)
+    return ordered_preferred or ordered_all
 
 
 def _find_relation_path(
@@ -96,7 +117,6 @@ def _concept_record(index: RelationIndex, concept_id: str | None, *, override_la
     }
 
 
-
 def fill_slots_v1(
     plan: PlanV1,
     divergence: DivergenceResult,
@@ -104,7 +124,7 @@ def fill_slots_v1(
     index: RelationIndex,
 ) -> SlotResult:
     accepted = convergence.accepted_concepts
-    ordered_seed_concepts = _seed_concepts_in_order(divergence)
+    ordered_seed_concepts = _seed_concepts_in_order(divergence, index)
 
     topic = None
     if ordered_seed_concepts:
@@ -122,6 +142,8 @@ def fill_slots_v1(
             if candidate_record is None:
                 continue
             if topic_label and candidate_record["label"] == topic_label:
+                continue
+            if _is_low_signal_concept(index, candidate["concept_id"]):
                 continue
             support = candidate_record
             break

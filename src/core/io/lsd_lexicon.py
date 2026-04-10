@@ -157,6 +157,13 @@ def read_bytes_with_len(buf: io.BytesIO) -> bytes:
     return data
 
 
+def skip_bytes_with_len(buf: io.BytesIO) -> None:
+    n = read_uvarint(buf)
+    data = buf.read(n)
+    if len(data) != n:
+        raise EOFError("Unexpected EOF while skipping length-prefixed bytes")
+
+
 def write_str(s: str) -> bytes:
     return write_bytes_with_len(s.encode("utf-8"))
 
@@ -1420,6 +1427,77 @@ def decode_string_id_list(buf: io.BytesIO, table: List[str]) -> List[str]:
     return out
 
 
+def skip_string_id_list(buf: io.BytesIO) -> None:
+    n = read_uvarint(buf)
+    for _ in range(n):
+        read_uvarint(buf)
+
+
+def _canonicalize_minimal_entry(word: str, extras_entry: Mapping[str, Any] | None) -> Dict[str, Any]:
+    raw = dict(extras_entry) if isinstance(extras_entry, Mapping) else {}
+    senses = _canonicalize_senses(raw.get("senses", []))
+    concept_ids = _derive_entry_concept_ids(raw, senses)
+    entry: Dict[str, Any] = {
+        "word": word,
+        "lemma": str(raw.get("lemma", word)),
+        "surface_forms": _canonicalize_surface_forms(raw.get("surface_forms", raw.get("surfaces", [])), word),
+        "senses": senses,
+        "concept_ids": concept_ids,
+    }
+    reading = _to_optional_str(raw.get("reading"))
+    if reading is not None:
+        entry["reading"] = reading
+    slot_frame_id = _to_optional_str(raw.get("slot_frame_id", raw.get("slot_frame")))
+    if slot_frame_id is not None:
+        entry["slot_frame_id"] = slot_frame_id
+    return entry
+
+
+def _decode_binary_entry_minimal(
+    buf: io.BytesIO,
+    string_table: List[str],
+    semantic_axes: List[str],
+) -> Dict[str, Any]:
+    word = string_table[read_uvarint(buf)]
+    _ = string_table[read_uvarint(buf)]
+
+    skip_bytes_with_len(buf)
+
+    read_uvarint(buf)
+    read_uvarint(buf)
+    read_uvarint(buf)
+    read_uvarint(buf)
+    scalar_blob = buf.read(5)
+    if len(scalar_blob) != 5:
+        raise EOFError("Unexpected EOF while skipping grammar scalars")
+
+    for _field in CORE_LIST_FIELDS:
+        skip_string_id_list(buf)
+
+    extras_blob = read_bytes_with_len(buf)
+    extras = json.loads(extras_blob.decode("utf-8"))
+    extras_entry = extras.get("entry") if isinstance(extras, Mapping) else None
+    return _canonicalize_minimal_entry(word, extras_entry if isinstance(extras_entry, Mapping) else None)
+
+
+def _build_flat_lexicon_container(
+    *,
+    meta: Mapping[str, Any],
+    entries: Mapping[str, Dict[str, Any]],
+    top_level_extras: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    container: Dict[str, Any] = {
+        "meta": dict(meta),
+        "entries": dict(entries),
+    }
+    extras = dict(top_level_extras) if isinstance(top_level_extras, Mapping) else {}
+    if "indexes" not in extras or not isinstance(extras.get("indexes"), Mapping):
+        extras["indexes"] = {}
+    for key, value in extras.items():
+        container[str(key)] = value
+    return container
+
+
 def _decode_binary_entry(
     buf: io.BytesIO,
     string_table: List[str],
@@ -1598,6 +1676,17 @@ class IndexedLSDLexicon(Mapping[str, Dict[str, Any]]):
         buf = io.BytesIO(rec)
         return _decode_binary_entry(buf, self._string_table, self._semantic_axes)
 
+    def _decode_record_minimal(self, rec_off: int, rec_size: int) -> Dict[str, Any]:
+        rec = bytes(self._mm[rec_off:rec_off + rec_size])
+        buf = io.BytesIO(rec)
+        return _decode_binary_entry_minimal(buf, self._string_table, self._semantic_axes)
+
+    def iter_decoded_entries(self, *, lightweight: bool = False) -> Iterator[tuple[str, Dict[str, Any]]]:
+        decoder = self._decode_record_minimal if lightweight else self._decode_record
+        for row_index, key in enumerate(self._keys):
+            _, rec_off, rec_size = self._row_info(row_index)
+            yield key, decoder(rec_off, rec_size)
+
     def __getitem__(self, key: str) -> Dict[str, Any]:
         row_index = self._key_to_row[key]
         _, rec_off, rec_size = self._row_info(row_index)
@@ -1630,19 +1719,115 @@ class IndexedLSDLexicon(Mapping[str, Dict[str, Any]]):
                 self._fp = None
 
 
-def load_indexed_lsd_lexicon_container(path: str | Path) -> Dict[str, Any]:
+def load_indexed_lsd_lexicon_container(
+    path: str | Path,
+    *,
+    normalize: bool = True,
+    lightweight: bool = False,
+) -> Dict[str, Any]:
     with IndexedLSDLexicon(path) as lex:
         progress = ConsoleProgressBar(len(lex), title=f"Loading {Path(path).name}", enabled=should_show_progress(path))
         entries: Dict[str, Any] = {}
-        for key in lex.keys():
-            entries[key] = lex[key]
+        for key, entry in lex.iter_decoded_entries(lightweight=lightweight):
+            entries[key] = entry
             progress.update()
         progress.close()
         meta = lex.meta
         top_level_extras = meta.pop(TOP_LEVEL_BINARY_META_KEY, {})
         if not isinstance(top_level_extras, Mapping):
             top_level_extras = {}
-        return normalize_lexicon_container({"meta": meta, "entries": entries, **dict(top_level_extras)})
+        flat = _build_flat_lexicon_container(meta=meta, entries=entries, top_level_extras=top_level_extras)
+        if not normalize:
+            return flat
+        return normalize_lexicon_container(flat)
+
+
+def inspect_lexicon_storage(path: str | Path) -> Dict[str, Any]:
+    path = Path(path)
+    suffix = path.suffix.lower()
+    info: Dict[str, Any] = {
+        "path": str(path),
+        "suffix": suffix,
+        "size_bytes": path.stat().st_size if path.exists() else 0,
+        "storage": "json",
+        "binary": False,
+        "fully_indexed": False,
+    }
+    if suffix not in {".lsd", ".lsdx"}:
+        return info
+    with path.open("rb") as f:
+        magic = f.read(max(len(INDEXED_MAGIC), len(MAGIC)))
+    if magic[:len(INDEXED_MAGIC)] == INDEXED_MAGIC:
+        info.update({"storage": "indexed_lsdx", "binary": True, "fully_indexed": True})
+    elif magic[:len(MAGIC)] == MAGIC:
+        info.update({"storage": "lsd", "binary": True, "fully_indexed": False})
+    else:
+        info.update({"storage": "unknown_binary", "binary": True, "fully_indexed": False})
+    return info
+
+
+def profile_lexicon_load(
+    path: str | Path,
+    *,
+    sample_size: int = 128,
+    skip_materialize: bool = False,
+    lightweight_materialize: bool = False,
+) -> Dict[str, Any]:
+    path = Path(path)
+    storage = inspect_lexicon_storage(path)
+    results: Dict[str, Any] = {"storage": storage, "timing_ms": {}, "sample_size": int(sample_size)}
+
+    detect_started = time.perf_counter()
+    _ = inspect_lexicon_storage(path)
+    results["timing_ms"]["detect_format_ms"] = round((time.perf_counter() - detect_started) * 1000.0, 3)
+
+    if storage.get("storage") != "indexed_lsdx":
+        materialize_started = time.perf_counter()
+        container = load_lexicon_container(path)
+        results["timing_ms"]["materialize_container_ms"] = round((time.perf_counter() - materialize_started) * 1000.0, 3)
+        results["materialized"] = {
+            "entry_count": len(container.get("entries", {})),
+            "concept_count": len(container.get("concepts", {})),
+            "slot_frame_count": len(container.get("slot_frames", {})),
+        }
+        return results
+
+    open_started = time.perf_counter()
+    with IndexedLSDLexicon(path) as lex:
+        results["timing_ms"]["indexed_open_ms"] = round((time.perf_counter() - open_started) * 1000.0, 3)
+        results["indexed_header"] = {
+            "entry_count": len(lex),
+            "semantic_axes": len(lex.axes),
+            "key_count": len(lex.keys()),
+        }
+
+        sample_started = time.perf_counter()
+        decoded_entries = 0
+        for decoded_entries, (_key, _entry) in enumerate(lex.iter_decoded_entries(lightweight=lightweight_materialize), start=1):
+            if decoded_entries >= max(int(sample_size), 0):
+                break
+        sample_elapsed_ms = (time.perf_counter() - sample_started) * 1000.0
+        results["timing_ms"]["indexed_sample_decode_ms"] = round(sample_elapsed_ms, 3)
+        results["sample"] = {
+            "decoded_entries": decoded_entries,
+            "avg_ms_per_entry": round(sample_elapsed_ms / max(decoded_entries, 1), 6),
+        }
+
+    if skip_materialize:
+        results["materialized"] = None
+        return results
+
+    materialize_started = time.perf_counter()
+    container = load_indexed_lsd_lexicon_container(path, normalize=not lightweight_materialize, lightweight=lightweight_materialize)
+    results["timing_ms"]["materialize_container_ms"] = round((time.perf_counter() - materialize_started) * 1000.0, 3)
+    results["materialized"] = {
+        "entry_count": len(container.get("entries", {})),
+        "concept_count": len(container.get("concepts", {})),
+        "slot_frame_count": len(container.get("slot_frames", {})),
+        "lightweight": bool(lightweight_materialize),
+        "normalized": not bool(lightweight_materialize),
+    }
+    return results
 
 
 def load_lexicon_container(path: str | Path) -> Dict[str, Any]:

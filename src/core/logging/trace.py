@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import shutil
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-JST = ZoneInfo("Asia/Tokyo")
+try:
+    JST = ZoneInfo("Asia/Tokyo")
+except ZoneInfoNotFoundError:
+    JST = timezone(timedelta(hours=9))
 
 
 class TraceLogger:

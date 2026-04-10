@@ -61,6 +61,16 @@ def render_surface_v1(plan: PlanV1, slots: SlotResult, *, accepted_relations: li
     inverse_topic_support_hypernym_path = slots.slot_evidence.get("inverse_topic_support_hypernym_path")
 
     if plan.needs_clarification or topic is None:
+        if plan.fallback_reason == "unknown_focus_term" and plan.unknown_focus:
+            text = (
+                f"「{plan.unknown_focus}」という語は、いまの辞書だけだと手がかりがまだ足りません。"
+                "分野や前後の文脈を少し足してもらえると、意味をかなり絞りやすくなります。"
+            )
+            return {
+                "sentence_plan": {"mode": "clarification", "kind": "unknown_focus_term"},
+                "final_text": text,
+                "style_choice": "neutral",
+            }
         text = "まだ主題の手がかりが少ないので、知りたい対象を一語か短文で教えてください。"
         return {"sentence_plan": {"mode": "clarification"}, "final_text": text, "style_choice": "neutral"}
 

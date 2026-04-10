@@ -230,6 +230,15 @@ YYYY-MM-DD HH:MM:SS [LEVEL] message
 - final text
 - postprocess notes
 
+## 7.7 External teacher review candidates
+
+- teacher_requests
+- teacher_outputs
+- teacher_selection
+- teacher_improvement_candidates
+
+重要なのは、teacher_hints をそのまま辞書へ戻さず、review candidate として保存することです。
+
 ---
 
 ## 8. score / reward / timing の扱い

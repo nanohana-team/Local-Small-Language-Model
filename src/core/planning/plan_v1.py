@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List
 
 
 QUESTION_WORDS = (
@@ -29,6 +30,13 @@ EMPATHY_HINTS = (
 COMPARE_HINTS = ("比較", "違い", "どっち", "どちら", "比べ")
 PROCEDURE_HINTS = ("手順", "やり方", "方法", "設定", "実装")
 REASON_HINTS = ("なぜ", "どうして", "理由", "なんで")
+DEFINITION_PATTERNS = (
+    re.compile(r'^\s*[「『"\']?(?P<term>.+?)[」』"\']?\s*(?:って|とは)\s*(?:何|なに|なん(?:ですか)?|どういう意味)\s*[？?]?$'),
+    re.compile(r'^\s*[「『"\'](?P<term>.+?)[」』"\']\s*(?:って|とは)?\s*(?:何|なに|なん(?:ですか)?|どういう意味)?\s*[？?]?$'),
+)
+ASCII_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+\-./]*")
+KATAKANA_WORD_RE = re.compile(r"[ァ-ヶヴー]{2,}")
+QUOTE_TRIM = " \t\n\r\"'「」『』()（）[]{}.,!?！？:：;；"
 
 
 @dataclass
@@ -40,6 +48,8 @@ class PlanV1:
     tone: str
     needs_clarification: bool = False
     fallback_reason: str | None = None
+    unknown_focus: str | None = None
+    wants_definition: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -51,8 +61,48 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
 
 
 
-def build_plan_v1(text: str, *, topic_count: int = 0, unknown_words: int = 0) -> PlanV1:
+def _clean_focus_term(term: str) -> str:
+    cleaned = str(term or "").strip(QUOTE_TRIM)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"(?:って|とは)$", "", cleaned).strip(QUOTE_TRIM)
+    return cleaned
+
+
+
+def extract_unknown_focus_term(text: str) -> str | None:
     normalized = str(text).strip()
+    for pattern in DEFINITION_PATTERNS:
+        match = pattern.match(normalized)
+        if not match:
+            continue
+        term = _clean_focus_term(match.group("term"))
+        if len(term) >= 2:
+            return term
+
+    ascii_words = ASCII_WORD_RE.findall(normalized)
+    if ascii_words and ("?" in normalized or "？" in normalized or _contains_any(normalized, QUESTION_WORDS)):
+        return max(ascii_words, key=len)
+
+    katakana_words = [word for word in KATAKANA_WORD_RE.findall(normalized) if word not in {"ナニ", "ドウ", "ナゼ"}]
+    if katakana_words and ("?" in normalized or "？" in normalized or _contains_any(normalized, QUESTION_WORDS)):
+        return max(katakana_words, key=len)
+
+    return None
+
+
+
+def build_plan_v1(
+    text: str,
+    *,
+    topic_count: int = 0,
+    unknown_words: int = 0,
+    unknown_focus: str | None = None,
+) -> PlanV1:
+    normalized = str(text).strip()
+    unknown_focus = _clean_focus_term(unknown_focus) if unknown_focus else None
+    wants_definition = unknown_focus is not None and (
+        "?" in normalized or "？" in normalized or _contains_any(normalized, QUESTION_WORDS) or "って" in normalized or "とは" in normalized
+    )
 
     intent = "answer"
     response_mode = "brief_explanation"
@@ -82,6 +132,11 @@ def build_plan_v1(text: str, *, topic_count: int = 0, unknown_words: int = 0) ->
         response_mode = "steps"
         required_slots = ["topic", "support"]
         relation_type_priority = ["predicate_slot", "argument_role", "related_to", "collocation"]
+    elif wants_definition:
+        intent = "define"
+        response_mode = "brief_definition"
+        required_slots = ["topic", "support"]
+        relation_type_priority = ["hypernym", "paraphrase", "related_to", "hyponym"]
     elif "?" in normalized or "？" in normalized or _contains_any(normalized, QUESTION_WORDS):
         intent = "answer"
         response_mode = "brief_explanation"
@@ -95,9 +150,12 @@ def build_plan_v1(text: str, *, topic_count: int = 0, unknown_words: int = 0) ->
 
     if topic_count == 0:
         needs_clarification = True
-        fallback_reason = "topic_not_detected"
         required_slots = ["topic"]
         relation_type_priority = ["related_to", "paraphrase"]
+        if unknown_focus:
+            fallback_reason = "unknown_focus_term"
+        else:
+            fallback_reason = "topic_not_detected"
     elif unknown_words > max(topic_count, 2):
         fallback_reason = "unknown_words_dominant"
 
@@ -109,7 +167,9 @@ def build_plan_v1(text: str, *, topic_count: int = 0, unknown_words: int = 0) ->
         tone=tone,
         needs_clarification=needs_clarification,
         fallback_reason=fallback_reason,
+        unknown_focus=unknown_focus,
+        wants_definition=wants_definition,
     )
 
 
-__all__ = ["PlanV1", "build_plan_v1"]
+__all__ = ["PlanV1", "build_plan_v1", "extract_unknown_focus_term"]

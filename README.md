@@ -127,6 +127,12 @@ relation 基盤 → trace → Plan → Divergence / Convergence → Slot / Surfa
 python -m src.apps.chat_v1 --lexicon runtime/dictionaries/bootstrapped_v1.json --text "猫は動物？"
 ```
 
+または `main.py` から次のように呼べます。
+
+```bash
+python -m main --mode chat --lexicon runtime/dictionaries/bootstrapped_v1.json --text "猫は動物？"
+```
+
 対話モードで起動する場合は `--text` を省略します。
 実行すると `runtime/logs/latest.log` と `runtime/traces/latest.jsonl` に記録されます。
 

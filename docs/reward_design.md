@@ -161,6 +161,37 @@ beta = 0.2
 - 外部評価ノイズを過信しない
 - 低資源・高再現性の思想に合う
 
+## 6.1 evaluator と teacher を両方使う場合
+
+v4 では external signal を 1 本に潰してから `total` へ入れます。  
+ただし、このときも **evaluator と teacher の役割は同一ではない** と考えます。
+
+- `evaluator`  
+  最終応答を採点する主 signal
+- `teacher`  
+  改善案と補助採点を返す副 signal
+
+そのため、両方が利用可能な場合は次のような **主従付き合成** を初期推奨とします。
+
+```python
+external = (0.8 * evaluator_score + 0.2 * teacher_score) / (0.8 + 0.2)
+```
+
+そして最終報酬は次で計算します。
+
+```python
+total = 0.8 * internal + 0.2 * external
+```
+
+この形の利点:
+
+- evaluator 不在時でも teacher 単独で external を補完できる
+- evaluator があるときは teacher が補助に回るので外部 signal が暴れにくい
+- teacher を入れても evaluator の役割が崩れにくい
+- external signal の合成規則を trace と設定で追跡できる
+
+重みは固定値でコードへ焼き込まず、設定で差し替えられるようにします。
+
 ---
 
 ## 7. 保存形式

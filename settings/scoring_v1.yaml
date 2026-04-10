@@ -1,0 +1,25 @@
+version: 1
+latency:
+  target_ms: 500.0
+  hard_limit_ms: 3000.0
+thresholds:
+  strong_seed_score: 0.25
+  accepted_relation_target: 4
+  accepted_concept_target: 4
+  divergence_candidate_target: 6
+weights:
+  plan_fitness: 0.15
+  relation_coverage: 0.15
+  divergence_relevance: 0.10
+  convergence_fitness: 0.15
+  relation_precision: 0.10
+  slot_fitness: 0.15
+  grammar_fitness: 0.08
+  input_retention: 0.07
+  latency_fitness: 0.03
+  dangling_penalty: 0.02
+external_reward:
+  internal_weight: 0.8
+  external_weight: 0.2
+  evaluator_mix: 0.8
+  teacher_mix: 0.2

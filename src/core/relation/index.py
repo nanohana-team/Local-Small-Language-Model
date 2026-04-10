@@ -102,25 +102,30 @@ def _build_surface_first_char(surface_to_entries: Mapping[str, List[str]]) -> Di
 
 
 def build_relation_index(container: Mapping[str, Any]) -> RelationIndex:
+    concept_source = container.get("concepts", {})
     concepts = {
         str(key): value
-        for key, value in dict(container.get("concepts", {})).items()
-        if isinstance(value, Mapping)
-    }
+        for key, value in concept_source.items()
+        if isinstance(concept_source, Mapping) and isinstance(value, Mapping)
+    } if isinstance(concept_source, Mapping) else {}
+
     lexical_source = container.get("lexical_entries")
     if not isinstance(lexical_source, Mapping):
         lexical_source = container.get("entries", {})
     lexical_entries = {
         str(key): value
-        for key, value in dict(lexical_source).items()
+        for key, value in lexical_source.items()
         if isinstance(value, Mapping)
-    }
+    } if isinstance(lexical_source, Mapping) else {}
+
+    slot_source = container.get("slot_frames", {})
     slot_frames = {
         str(key): value
-        for key, value in dict(container.get("slot_frames", {})).items()
+        for key, value in slot_source.items()
         if isinstance(value, Mapping)
-    }
-    indexes = dict(container.get("indexes", {})) if isinstance(container.get("indexes"), Mapping) else {}
+    } if isinstance(slot_source, Mapping) else {}
+
+    indexes = container.get("indexes") if isinstance(container.get("indexes"), Mapping) else {}
     raw_concept_to_entries = indexes.get("concept_to_entries") if isinstance(indexes.get("concept_to_entries"), Mapping) else {}
     concept_to_entries: Dict[str, List[str]] = {
         str(concept_id): [str(entry_id) for entry_id in entry_ids]
