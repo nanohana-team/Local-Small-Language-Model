@@ -1,0 +1,5105 @@
+{
+  "meta": {
+    "schema_version": "v4-bridge",
+    "build_version": "0.3.0-conversation-seed",
+    "semantic_axes": [
+      "valence",
+      "arousal",
+      "abstractness",
+      "sociality",
+      "temporality",
+      "agency",
+      "causality",
+      "certainty",
+      "deixis",
+      "discourse_force"
+    ],
+    "seed_name": "conversation_ja_core",
+    "seed_policy": "augment_conversation_lexicon",
+    "relation_seed": "manual_social_core"
+  },
+  "concepts": {
+    "concept:social_exchange": {
+      "id": "concept:social_exchange",
+      "label": "会話応答",
+      "category": "social",
+      "description": "会話で頻出する定型的な応答のまとまり。",
+      "relations": [
+        {
+          "type": "hyponym",
+          "target": "concept:greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:thanks",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:thanks_reply",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:apology",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:apology_reply",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:acknowledgement",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:affirmation",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:negation",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:farewell",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:social_question",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:fine_reply",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:request_repeat",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:continue_request",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.95,
+        "discourse_force": 0.85
+      }
+    },
+    "concept:greeting": {
+      "id": "concept:greeting",
+      "label": "挨拶",
+      "category": "social",
+      "description": "出会い頭や会話開始時の定型表現。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:casual_greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:morning_greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "hyponym",
+          "target": "concept:evening_greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hypernym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:social_question",
+          "weight": 0.82,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.82,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.9
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:casual_greeting": {
+      "id": "concept:casual_greeting",
+      "label": "くだけた挨拶",
+      "category": "social",
+      "description": "親しい相手への軽い挨拶。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:acknowledgement",
+          "weight": 0.78,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.78,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.86
+      }
+    },
+    "concept:morning_greeting": {
+      "id": "concept:morning_greeting",
+      "label": "朝の挨拶",
+      "category": "social",
+      "description": "朝に使う挨拶。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "temporality": 0.8,
+        "sociality": 0.82
+      }
+    },
+    "concept:evening_greeting": {
+      "id": "concept:evening_greeting",
+      "label": "夜の挨拶",
+      "category": "social",
+      "description": "夕方から夜に使う挨拶。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:greeting",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "temporality": 0.72,
+        "sociality": 0.82
+      }
+    },
+    "concept:thanks": {
+      "id": "concept:thanks",
+      "label": "感謝",
+      "category": "social",
+      "description": "相手への感謝を表す表現。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:thanks_reply",
+          "weight": 0.94,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.94,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": 0.84,
+        "sociality": 0.92
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:thanks_reply": {
+      "id": "concept:thanks_reply",
+      "label": "感謝への応答",
+      "category": "social",
+      "description": "感謝を受けたときの返答。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:thanks",
+          "weight": 0.94,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.94,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:acknowledgement",
+          "weight": 0.78,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.78,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": 0.72,
+        "sociality": 0.9
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:apology": {
+      "id": "concept:apology",
+      "label": "謝罪",
+      "category": "social",
+      "description": "相手への謝罪を表す表現。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:apology_reply",
+          "weight": 0.9,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.9,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": -0.22,
+        "sociality": 0.9
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:apology_reply": {
+      "id": "concept:apology_reply",
+      "label": "謝罪への応答",
+      "category": "social",
+      "description": "謝罪を受けたときに安心させる返答。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:apology",
+          "weight": 0.9,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.9,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:fine_reply",
+          "weight": 0.72,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.72,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": 0.4,
+        "sociality": 0.9
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:acknowledgement": {
+      "id": "concept:acknowledgement",
+      "label": "相づち",
+      "category": "social",
+      "description": "相手の発話を受け止める短い反応。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:affirmation",
+          "weight": 0.82,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.82,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:greeting",
+          "weight": 0.72,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.72,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.86,
+        "discourse_force": 0.8
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:affirmation": {
+      "id": "concept:affirmation",
+      "label": "肯定",
+      "category": "social",
+      "description": "相手の問いや提案を肯定する応答。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:acknowledgement",
+          "weight": 0.82,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.82,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:fine_reply",
+          "weight": 0.86,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.86,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:positive_state",
+          "weight": 0.72,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.72,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": 0.55,
+        "certainty": 0.78
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:negation": {
+      "id": "concept:negation",
+      "label": "否定",
+      "category": "social",
+      "description": "相手の問いや前提を否定する応答。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:affirmation",
+          "weight": 0.65,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.65,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": -0.1,
+        "certainty": 0.76
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:farewell": {
+      "id": "concept:farewell",
+      "label": "別れの挨拶",
+      "category": "social",
+      "description": "会話の終わりに使う表現。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:greeting",
+          "weight": 0.72,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.72,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.82,
+        "temporality": 0.45
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:social_question": {
+      "id": "concept:social_question",
+      "label": "近況確認",
+      "category": "social",
+      "description": "相手の調子や近況をたずねる短い問い。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:fine_reply",
+          "weight": 0.94,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.94,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:positive_state",
+          "weight": 0.86,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.86,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:greeting",
+          "weight": 0.82,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.82,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.9,
+        "deixis": 0.48
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:positive_state": {
+      "id": "concept:positive_state",
+      "label": "良好な状態",
+      "category": "social",
+      "description": "元気・大丈夫などの前向きな状態。",
+      "relations": [
+        {
+          "type": "related_to",
+          "target": "concept:fine_reply",
+          "weight": 0.88,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.88,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:social_question",
+          "weight": 0.86,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.86,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": 0.78,
+        "sociality": 0.72
+      }
+    },
+    "concept:fine_reply": {
+      "id": "concept:fine_reply",
+      "label": "元気な返答",
+      "category": "social",
+      "description": "元気かどうかへの肯定的な返答。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:social_question",
+          "weight": 0.94,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.94,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:positive_state",
+          "weight": 0.88,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.88,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:affirmation",
+          "weight": 0.86,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.86,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "valence": 0.82,
+        "sociality": 0.84
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:request_repeat": {
+      "id": "concept:request_repeat",
+      "label": "聞き返し",
+      "category": "social",
+      "description": "聞こえなかったときにもう一度求める表現。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:continue_request",
+          "weight": 0.72,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.72,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.68,
+        "certainty": 0.58
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    },
+    "concept:continue_request": {
+      "id": "concept:continue_request",
+      "label": "続き要求",
+      "category": "social",
+      "description": "続きを求める表現。",
+      "relations": [
+        {
+          "type": "hypernym",
+          "target": "concept:social_exchange",
+          "weight": 0.92,
+          "direction": "outbound",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence"
+          ],
+          "inverse_type": "hyponym",
+          "confidence": 0.92,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        },
+        {
+          "type": "related_to",
+          "target": "concept:request_repeat",
+          "weight": 0.72,
+          "direction": "bidirectional",
+          "layer": "semantic",
+          "usage_stage": [
+            "divergence",
+            "convergence",
+            "surface"
+          ],
+          "inverse_type": "related_to",
+          "confidence": 0.72,
+          "meta": {
+            "source": "seed_conversation_ja_core",
+            "seed_quality": "conversation_core"
+          }
+        }
+      ],
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "axes": {
+        "sociality": 0.64,
+        "certainty": 0.64
+      },
+      "default_slot_frame_id": "slot_frame:social_exchange"
+    }
+  },
+  "slot_frames": {
+    "slot_frame:social_exchange": {
+      "id": "slot_frame:social_exchange",
+      "slots": [
+        {
+          "name": "speaker_state",
+          "required": false
+        },
+        {
+          "name": "listener_state",
+          "required": false
+        },
+        {
+          "name": "target",
+          "required": false
+        },
+        {
+          "name": "tone",
+          "required": false
+        }
+      ]
+    }
+  },
+  "entries": {
+    "やあ": {
+      "word": "やあ",
+      "lemma": "やあ",
+      "reading": "やあ",
+      "surface_forms": [
+        {
+          "text": "やあ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:やあ:1",
+          "gloss": "やあ",
+          "concept_ids": [
+            "concept:casual_greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:casual_greeting"
+      ]
+    },
+    "よう": {
+      "word": "よう",
+      "lemma": "よう",
+      "reading": "よう",
+      "surface_forms": [
+        {
+          "text": "よう",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:よう:1",
+          "gloss": "よう",
+          "concept_ids": [
+            "concept:casual_greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:casual_greeting"
+      ]
+    },
+    "こんにちは": {
+      "word": "こんにちは",
+      "lemma": "こんにちは",
+      "reading": "こんにちは",
+      "surface_forms": [
+        {
+          "text": "こんにちは",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:こんにちは:1",
+          "gloss": "こんにちは",
+          "concept_ids": [
+            "concept:greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:greeting"
+      ]
+    },
+    "こんばんは": {
+      "word": "こんばんは",
+      "lemma": "こんばんは",
+      "reading": "こんばんは",
+      "surface_forms": [
+        {
+          "text": "こんばんは",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:こんばんは:1",
+          "gloss": "こんばんは",
+          "concept_ids": [
+            "concept:evening_greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:evening_greeting"
+      ]
+    },
+    "おはよう": {
+      "word": "おはよう",
+      "lemma": "おはよう",
+      "reading": "おはよう",
+      "surface_forms": [
+        {
+          "text": "おはよう",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:おはよう:1",
+          "gloss": "おはよう",
+          "concept_ids": [
+            "concept:morning_greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:morning_greeting"
+      ]
+    },
+    "おはようございます": {
+      "word": "おはようございます",
+      "lemma": "おはようございます",
+      "reading": "おはようございます",
+      "surface_forms": [
+        {
+          "text": "おはようございます",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:おはようございます:1",
+          "gloss": "おはようございます",
+          "concept_ids": [
+            "concept:morning_greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:morning_greeting"
+      ]
+    },
+    "お疲れさま": {
+      "word": "お疲れさま",
+      "lemma": "お疲れさま",
+      "reading": "おつかれさま",
+      "surface_forms": [
+        {
+          "text": "お疲れさま",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:お疲れさま:1",
+          "gloss": "お疲れさま",
+          "concept_ids": [
+            "concept:greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:greeting"
+      ]
+    },
+    "お疲れ様": {
+      "word": "お疲れ様",
+      "lemma": "お疲れ様",
+      "reading": "おつかれさま",
+      "surface_forms": [
+        {
+          "text": "お疲れ様",
+          "kind": "lemma"
+        },
+        {
+          "text": "お疲れさま",
+          "kind": "variant"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:お疲れ様:1",
+          "gloss": "お疲れ様",
+          "concept_ids": [
+            "concept:greeting"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:greeting"
+      ]
+    },
+    "どうも": {
+      "word": "どうも",
+      "lemma": "どうも",
+      "reading": "どうも",
+      "surface_forms": [
+        {
+          "text": "どうも",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:どうも:1",
+          "gloss": "どうも",
+          "concept_ids": [
+            "concept:casual_greeting",
+            "concept:thanks_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:casual_greeting",
+        "concept:thanks_reply"
+      ]
+    },
+    "ありがとう": {
+      "word": "ありがとう",
+      "lemma": "ありがとう",
+      "reading": "ありがとう",
+      "surface_forms": [
+        {
+          "text": "ありがとう",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ありがとう:1",
+          "gloss": "ありがとう",
+          "concept_ids": [
+            "concept:thanks"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks"
+      ]
+    },
+    "ありがとうございます": {
+      "word": "ありがとうございます",
+      "lemma": "ありがとうございます",
+      "reading": "ありがとうございます",
+      "surface_forms": [
+        {
+          "text": "ありがとうございます",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ありがとうございます:1",
+          "gloss": "ありがとうございます",
+          "concept_ids": [
+            "concept:thanks"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks"
+      ]
+    },
+    "ありがと": {
+      "word": "ありがと",
+      "lemma": "ありがと",
+      "reading": "ありがと",
+      "surface_forms": [
+        {
+          "text": "ありがと",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ありがと:1",
+          "gloss": "ありがと",
+          "concept_ids": [
+            "concept:thanks"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks"
+      ]
+    },
+    "助かった": {
+      "word": "助かった",
+      "lemma": "助かった",
+      "reading": "たすかった",
+      "surface_forms": [
+        {
+          "text": "助かった",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:助かった:1",
+          "gloss": "助かった",
+          "concept_ids": [
+            "concept:thanks"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks"
+      ]
+    },
+    "どういたしまして": {
+      "word": "どういたしまして",
+      "lemma": "どういたしまして",
+      "reading": "どういたしまして",
+      "surface_forms": [
+        {
+          "text": "どういたしまして",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:どういたしまして:1",
+          "gloss": "どういたしまして",
+          "concept_ids": [
+            "concept:thanks_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks_reply"
+      ]
+    },
+    "いえいえ": {
+      "word": "いえいえ",
+      "lemma": "いえいえ",
+      "reading": "いえいえ",
+      "surface_forms": [
+        {
+          "text": "いえいえ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:いえいえ:1",
+          "gloss": "いえいえ",
+          "concept_ids": [
+            "concept:thanks_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks_reply"
+      ]
+    },
+    "こちらこそ": {
+      "word": "こちらこそ",
+      "lemma": "こちらこそ",
+      "reading": "こちらこそ",
+      "surface_forms": [
+        {
+          "text": "こちらこそ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:こちらこそ:1",
+          "gloss": "こちらこそ",
+          "concept_ids": [
+            "concept:thanks_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:thanks_reply"
+      ]
+    },
+    "ごめん": {
+      "word": "ごめん",
+      "lemma": "ごめん",
+      "reading": "ごめん",
+      "surface_forms": [
+        {
+          "text": "ごめん",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ごめん:1",
+          "gloss": "ごめん",
+          "concept_ids": [
+            "concept:apology"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology"
+      ]
+    },
+    "ごめんなさい": {
+      "word": "ごめんなさい",
+      "lemma": "ごめんなさい",
+      "reading": "ごめんなさい",
+      "surface_forms": [
+        {
+          "text": "ごめんなさい",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ごめんなさい:1",
+          "gloss": "ごめんなさい",
+          "concept_ids": [
+            "concept:apology"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology"
+      ]
+    },
+    "すみません": {
+      "word": "すみません",
+      "lemma": "すみません",
+      "reading": "すみません",
+      "surface_forms": [
+        {
+          "text": "すみません",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:すみません:1",
+          "gloss": "すみません",
+          "concept_ids": [
+            "concept:apology"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology"
+      ]
+    },
+    "失礼しました": {
+      "word": "失礼しました",
+      "lemma": "失礼しました",
+      "reading": "しつれいしました",
+      "surface_forms": [
+        {
+          "text": "失礼しました",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:失礼しました:1",
+          "gloss": "失礼しました",
+          "concept_ids": [
+            "concept:apology"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology"
+      ]
+    },
+    "大丈夫だよ": {
+      "word": "大丈夫だよ",
+      "lemma": "大丈夫だよ",
+      "reading": "だいじょうぶだよ",
+      "surface_forms": [
+        {
+          "text": "大丈夫だよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:大丈夫だよ:1",
+          "gloss": "大丈夫だよ",
+          "concept_ids": [
+            "concept:apology_reply",
+            "concept:fine_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology_reply",
+        "concept:fine_reply"
+      ]
+    },
+    "大丈夫です": {
+      "word": "大丈夫です",
+      "lemma": "大丈夫です",
+      "reading": "だいじょうぶです",
+      "surface_forms": [
+        {
+          "text": "大丈夫です",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:大丈夫です:1",
+          "gloss": "大丈夫です",
+          "concept_ids": [
+            "concept:apology_reply",
+            "concept:fine_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology_reply",
+        "concept:fine_reply"
+      ]
+    },
+    "気にしないで": {
+      "word": "気にしないで",
+      "lemma": "気にしないで",
+      "reading": "きにしないで",
+      "surface_forms": [
+        {
+          "text": "気にしないで",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:気にしないで:1",
+          "gloss": "気にしないで",
+          "concept_ids": [
+            "concept:apology_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology_reply"
+      ]
+    },
+    "問題ないよ": {
+      "word": "問題ないよ",
+      "lemma": "問題ないよ",
+      "reading": "もんだいないよ",
+      "surface_forms": [
+        {
+          "text": "問題ないよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:問題ないよ:1",
+          "gloss": "問題ないよ",
+          "concept_ids": [
+            "concept:apology_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology_reply"
+      ]
+    },
+    "問題ありません": {
+      "word": "問題ありません",
+      "lemma": "問題ありません",
+      "reading": "もんだいありません",
+      "surface_forms": [
+        {
+          "text": "問題ありません",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:問題ありません:1",
+          "gloss": "問題ありません",
+          "concept_ids": [
+            "concept:apology_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:apology_reply"
+      ]
+    },
+    "そっか": {
+      "word": "そっか",
+      "lemma": "そっか",
+      "reading": "そっか",
+      "surface_forms": [
+        {
+          "text": "そっか",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:そっか:1",
+          "gloss": "そっか",
+          "concept_ids": [
+            "concept:acknowledgement"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement"
+      ]
+    },
+    "なるほど": {
+      "word": "なるほど",
+      "lemma": "なるほど",
+      "reading": "なるほど",
+      "surface_forms": [
+        {
+          "text": "なるほど",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:なるほど:1",
+          "gloss": "なるほど",
+          "concept_ids": [
+            "concept:acknowledgement"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement"
+      ]
+    },
+    "了解": {
+      "word": "了解",
+      "lemma": "了解",
+      "reading": "りょうかい",
+      "surface_forms": [
+        {
+          "text": "了解",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:了解:1",
+          "gloss": "了解",
+          "concept_ids": [
+            "concept:acknowledgement"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement"
+      ]
+    },
+    "りょうかい": {
+      "word": "りょうかい",
+      "lemma": "りょうかい",
+      "reading": "りょうかい",
+      "surface_forms": [
+        {
+          "text": "りょうかい",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:りょうかい:1",
+          "gloss": "りょうかい",
+          "concept_ids": [
+            "concept:acknowledgement"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement"
+      ]
+    },
+    "わかった": {
+      "word": "わかった",
+      "lemma": "わかった",
+      "reading": "わかった",
+      "surface_forms": [
+        {
+          "text": "わかった",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:わかった:1",
+          "gloss": "わかった",
+          "concept_ids": [
+            "concept:acknowledgement",
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement",
+        "concept:affirmation"
+      ]
+    },
+    "分かった": {
+      "word": "分かった",
+      "lemma": "分かった",
+      "reading": "わかった",
+      "surface_forms": [
+        {
+          "text": "分かった",
+          "kind": "lemma"
+        },
+        {
+          "text": "わかった",
+          "kind": "reading_variant"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:分かった:1",
+          "gloss": "分かった",
+          "concept_ids": [
+            "concept:acknowledgement",
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement",
+        "concept:affirmation"
+      ]
+    },
+    "承知した": {
+      "word": "承知した",
+      "lemma": "承知した",
+      "reading": "しょうちした",
+      "surface_forms": [
+        {
+          "text": "承知した",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:承知した:1",
+          "gloss": "承知した",
+          "concept_ids": [
+            "concept:acknowledgement"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:acknowledgement"
+      ]
+    },
+    "うん": {
+      "word": "うん",
+      "lemma": "うん",
+      "reading": "うん",
+      "surface_forms": [
+        {
+          "text": "うん",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:うん:1",
+          "gloss": "うん",
+          "concept_ids": [
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:affirmation"
+      ]
+    },
+    "もちろん": {
+      "word": "もちろん",
+      "lemma": "もちろん",
+      "reading": "もちろん",
+      "surface_forms": [
+        {
+          "text": "もちろん",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:もちろん:1",
+          "gloss": "もちろん",
+          "concept_ids": [
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:affirmation"
+      ]
+    },
+    "その通り": {
+      "word": "その通り",
+      "lemma": "その通り",
+      "reading": "そのとおり",
+      "surface_forms": [
+        {
+          "text": "その通り",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:その通り:1",
+          "gloss": "その通り",
+          "concept_ids": [
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:affirmation"
+      ]
+    },
+    "そうだよ": {
+      "word": "そうだよ",
+      "lemma": "そうだよ",
+      "reading": "そうだよ",
+      "surface_forms": [
+        {
+          "text": "そうだよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:そうだよ:1",
+          "gloss": "そうだよ",
+          "concept_ids": [
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:affirmation"
+      ]
+    },
+    "そうです": {
+      "word": "そうです",
+      "lemma": "そうです",
+      "reading": "そうです",
+      "surface_forms": [
+        {
+          "text": "そうです",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:そうです:1",
+          "gloss": "そうです",
+          "concept_ids": [
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:affirmation"
+      ]
+    },
+    "いや": {
+      "word": "いや",
+      "lemma": "いや",
+      "reading": "いや",
+      "surface_forms": [
+        {
+          "text": "いや",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:いや:1",
+          "gloss": "いや",
+          "concept_ids": [
+            "concept:negation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:negation"
+      ]
+    },
+    "違うよ": {
+      "word": "違うよ",
+      "lemma": "違うよ",
+      "reading": "ちがうよ",
+      "surface_forms": [
+        {
+          "text": "違うよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:違うよ:1",
+          "gloss": "違うよ",
+          "concept_ids": [
+            "concept:negation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:negation"
+      ]
+    },
+    "ちがう": {
+      "word": "ちがう",
+      "lemma": "ちがう",
+      "reading": "ちがう",
+      "surface_forms": [
+        {
+          "text": "ちがう",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ちがう:1",
+          "gloss": "ちがう",
+          "concept_ids": [
+            "concept:negation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:negation"
+      ]
+    },
+    "まだだよ": {
+      "word": "まだだよ",
+      "lemma": "まだだよ",
+      "reading": "まだだよ",
+      "surface_forms": [
+        {
+          "text": "まだだよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:まだだよ:1",
+          "gloss": "まだだよ",
+          "concept_ids": [
+            "concept:negation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:negation"
+      ]
+    },
+    "またね": {
+      "word": "またね",
+      "lemma": "またね",
+      "reading": "またね",
+      "surface_forms": [
+        {
+          "text": "またね",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:またね:1",
+          "gloss": "またね",
+          "concept_ids": [
+            "concept:farewell"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:farewell"
+      ]
+    },
+    "じゃあね": {
+      "word": "じゃあね",
+      "lemma": "じゃあね",
+      "reading": "じゃあね",
+      "surface_forms": [
+        {
+          "text": "じゃあね",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:じゃあね:1",
+          "gloss": "じゃあね",
+          "concept_ids": [
+            "concept:farewell"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:farewell"
+      ]
+    },
+    "おやすみ": {
+      "word": "おやすみ",
+      "lemma": "おやすみ",
+      "reading": "おやすみ",
+      "surface_forms": [
+        {
+          "text": "おやすみ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:おやすみ:1",
+          "gloss": "おやすみ",
+          "concept_ids": [
+            "concept:farewell"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:farewell"
+      ]
+    },
+    "ばいばい": {
+      "word": "ばいばい",
+      "lemma": "ばいばい",
+      "reading": "ばいばい",
+      "surface_forms": [
+        {
+          "text": "ばいばい",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "interjection",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:ばいばい:1",
+          "gloss": "ばいばい",
+          "concept_ids": [
+            "concept:farewell"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:farewell"
+      ]
+    },
+    "失礼します": {
+      "word": "失礼します",
+      "lemma": "失礼します",
+      "reading": "しつれいします",
+      "surface_forms": [
+        {
+          "text": "失礼します",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:失礼します:1",
+          "gloss": "失礼します",
+          "concept_ids": [
+            "concept:farewell"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:farewell"
+      ]
+    },
+    "元気？": {
+      "word": "元気？",
+      "lemma": "元気？",
+      "reading": "げんき",
+      "surface_forms": [
+        {
+          "text": "元気？",
+          "kind": "lemma"
+        },
+        {
+          "text": "元気",
+          "kind": "bare"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気？:1",
+          "gloss": "元気？",
+          "concept_ids": [
+            "concept:social_question"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:social_question"
+      ]
+    },
+    "元気かい？": {
+      "word": "元気かい？",
+      "lemma": "元気かい？",
+      "reading": "げんきかい",
+      "surface_forms": [
+        {
+          "text": "元気かい？",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気かい？:1",
+          "gloss": "元気かい？",
+          "concept_ids": [
+            "concept:social_question"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:social_question"
+      ]
+    },
+    "元気ですか": {
+      "word": "元気ですか",
+      "lemma": "元気ですか",
+      "reading": "げんきですか",
+      "surface_forms": [
+        {
+          "text": "元気ですか",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気ですか:1",
+          "gloss": "元気ですか",
+          "concept_ids": [
+            "concept:social_question"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:social_question"
+      ]
+    },
+    "調子どう": {
+      "word": "調子どう",
+      "lemma": "調子どう",
+      "reading": "ちょうしどう",
+      "surface_forms": [
+        {
+          "text": "調子どう",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:調子どう:1",
+          "gloss": "調子どう",
+          "concept_ids": [
+            "concept:social_question"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:social_question"
+      ]
+    },
+    "調子はどう": {
+      "word": "調子はどう",
+      "lemma": "調子はどう",
+      "reading": "ちょうしはどう",
+      "surface_forms": [
+        {
+          "text": "調子はどう",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:調子はどう:1",
+          "gloss": "調子はどう",
+          "concept_ids": [
+            "concept:social_question"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:social_question"
+      ]
+    },
+    "大丈夫？": {
+      "word": "大丈夫？",
+      "lemma": "大丈夫？",
+      "reading": "だいじょうぶ",
+      "surface_forms": [
+        {
+          "text": "大丈夫？",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:大丈夫？:1",
+          "gloss": "大丈夫？",
+          "concept_ids": [
+            "concept:social_question"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:social_question"
+      ]
+    },
+    "元気": {
+      "word": "元気",
+      "lemma": "元気",
+      "reading": "げんき",
+      "surface_forms": [
+        {
+          "text": "元気",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "adjectival_noun",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気:1",
+          "gloss": "元気",
+          "concept_ids": [
+            "concept:positive_state"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:positive_state"
+      ]
+    },
+    "大丈夫": {
+      "word": "大丈夫",
+      "lemma": "大丈夫",
+      "reading": "だいじょうぶ",
+      "surface_forms": [
+        {
+          "text": "大丈夫",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "adjectival_noun",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:大丈夫:1",
+          "gloss": "大丈夫",
+          "concept_ids": [
+            "concept:positive_state"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:positive_state"
+      ]
+    },
+    "元気だよ": {
+      "word": "元気だよ",
+      "lemma": "元気だよ",
+      "reading": "げんきだよ",
+      "surface_forms": [
+        {
+          "text": "元気だよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気だよ:1",
+          "gloss": "元気だよ",
+          "concept_ids": [
+            "concept:fine_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:fine_reply"
+      ]
+    },
+    "元気です": {
+      "word": "元気です",
+      "lemma": "元気です",
+      "reading": "げんきです",
+      "surface_forms": [
+        {
+          "text": "元気です",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気です:1",
+          "gloss": "元気です",
+          "concept_ids": [
+            "concept:fine_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "polite"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:fine_reply"
+      ]
+    },
+    "元気だね": {
+      "word": "元気だね",
+      "lemma": "元気だね",
+      "reading": "げんきだね",
+      "surface_forms": [
+        {
+          "text": "元気だね",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:元気だね:1",
+          "gloss": "元気だね",
+          "concept_ids": [
+            "concept:fine_reply"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:fine_reply"
+      ]
+    },
+    "もちろん元気だよ": {
+      "word": "もちろん元気だよ",
+      "lemma": "もちろん元気だよ",
+      "reading": "もちろんげんきだよ",
+      "surface_forms": [
+        {
+          "text": "もちろん元気だよ",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:もちろん元気だよ:1",
+          "gloss": "もちろん元気だよ",
+          "concept_ids": [
+            "concept:fine_reply",
+            "concept:affirmation"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:fine_reply",
+        "concept:affirmation"
+      ]
+    },
+    "もう一回": {
+      "word": "もう一回",
+      "lemma": "もう一回",
+      "reading": "もういっかい",
+      "surface_forms": [
+        {
+          "text": "もう一回",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:もう一回:1",
+          "gloss": "もう一回",
+          "concept_ids": [
+            "concept:request_repeat"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:request_repeat"
+      ]
+    },
+    "もういちど": {
+      "word": "もういちど",
+      "lemma": "もういちど",
+      "reading": "もういちど",
+      "surface_forms": [
+        {
+          "text": "もういちど",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:もういちど:1",
+          "gloss": "もういちど",
+          "concept_ids": [
+            "concept:request_repeat"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:request_repeat"
+      ]
+    },
+    "もう一度": {
+      "word": "もう一度",
+      "lemma": "もう一度",
+      "reading": "もういちど",
+      "surface_forms": [
+        {
+          "text": "もう一度",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:もう一度:1",
+          "gloss": "もう一度",
+          "concept_ids": [
+            "concept:request_repeat"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:request_repeat"
+      ]
+    },
+    "聞こえなかった": {
+      "word": "聞こえなかった",
+      "lemma": "聞こえなかった",
+      "reading": "きこえなかった",
+      "surface_forms": [
+        {
+          "text": "聞こえなかった",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:聞こえなかった:1",
+          "gloss": "聞こえなかった",
+          "concept_ids": [
+            "concept:request_repeat"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:request_repeat"
+      ]
+    },
+    "わからなかった": {
+      "word": "わからなかった",
+      "lemma": "わからなかった",
+      "reading": "わからなかった",
+      "surface_forms": [
+        {
+          "text": "わからなかった",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:わからなかった:1",
+          "gloss": "わからなかった",
+          "concept_ids": [
+            "concept:request_repeat"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "casual"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:request_repeat"
+      ]
+    },
+    "続けて": {
+      "word": "続けて",
+      "lemma": "続けて",
+      "reading": "つづけて",
+      "surface_forms": [
+        {
+          "text": "続けて",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:続けて:1",
+          "gloss": "続けて",
+          "concept_ids": [
+            "concept:continue_request"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:continue_request"
+      ]
+    },
+    "続きを教えて": {
+      "word": "続きを教えて",
+      "lemma": "続きを教えて",
+      "reading": "つづきをおしえて",
+      "surface_forms": [
+        {
+          "text": "続きを教えて",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:続きを教えて:1",
+          "gloss": "続きを教えて",
+          "concept_ids": [
+            "concept:continue_request"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:continue_request"
+      ]
+    },
+    "もっと詳しく": {
+      "word": "もっと詳しく",
+      "lemma": "もっと詳しく",
+      "reading": "もっとくわしく",
+      "surface_forms": [
+        {
+          "text": "もっと詳しく",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:もっと詳しく:1",
+          "gloss": "もっと詳しく",
+          "concept_ids": [
+            "concept:continue_request"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:continue_request"
+      ]
+    },
+    "詳しく教えて": {
+      "word": "詳しく教えて",
+      "lemma": "詳しく教えて",
+      "reading": "くわしくおしえて",
+      "surface_forms": [
+        {
+          "text": "詳しく教えて",
+          "kind": "lemma"
+        }
+      ],
+      "grammar": {
+        "pos": "expression",
+        "sub_pos": "independent",
+        "conjugation_type": "none",
+        "conjugation_slot": "dictionary",
+        "connectability": 1.0,
+        "independent": true,
+        "can_start": true,
+        "can_end": true,
+        "content_word": true,
+        "function_word": false,
+        "requires_prev": [],
+        "requires_next": [],
+        "forbid_prev": [],
+        "forbid_next": []
+      },
+      "senses": [
+        {
+          "id": "sense:詳しく教えて:1",
+          "gloss": "詳しく教えて",
+          "concept_ids": [
+            "concept:continue_request"
+          ],
+          "priority": 1.0
+        }
+      ],
+      "style_tags": [
+        "neutral"
+      ],
+      "frequency": 0.72,
+      "meta": {
+        "seed_tier": "conversation_core"
+      },
+      "category": "expression",
+      "concept_ids": [
+        "concept:continue_request"
+      ]
+    }
+  },
+  "indexes": {
+    "surface_to_entry": {
+      "やあ": [
+        "やあ"
+      ],
+      "よう": [
+        "よう"
+      ],
+      "こんにちは": [
+        "こんにちは"
+      ],
+      "こんばんは": [
+        "こんばんは"
+      ],
+      "おはよう": [
+        "おはよう"
+      ],
+      "おはようございます": [
+        "おはようございます"
+      ],
+      "お疲れさま": [
+        "お疲れさま",
+        "お疲れ様"
+      ],
+      "おつかれさま": [
+        "お疲れさま",
+        "お疲れ様"
+      ],
+      "お疲れ様": [
+        "お疲れ様"
+      ],
+      "どうも": [
+        "どうも"
+      ],
+      "ありがとう": [
+        "ありがとう"
+      ],
+      "ありがとうございます": [
+        "ありがとうございます"
+      ],
+      "ありがと": [
+        "ありがと"
+      ],
+      "助かった": [
+        "助かった"
+      ],
+      "たすかった": [
+        "助かった"
+      ],
+      "どういたしまして": [
+        "どういたしまして"
+      ],
+      "いえいえ": [
+        "いえいえ"
+      ],
+      "こちらこそ": [
+        "こちらこそ"
+      ],
+      "ごめん": [
+        "ごめん"
+      ],
+      "ごめんなさい": [
+        "ごめんなさい"
+      ],
+      "すみません": [
+        "すみません"
+      ],
+      "失礼しました": [
+        "失礼しました"
+      ],
+      "しつれいしました": [
+        "失礼しました"
+      ],
+      "大丈夫だよ": [
+        "大丈夫だよ"
+      ],
+      "だいじょうぶだよ": [
+        "大丈夫だよ"
+      ],
+      "大丈夫です": [
+        "大丈夫です"
+      ],
+      "だいじょうぶです": [
+        "大丈夫です"
+      ],
+      "気にしないで": [
+        "気にしないで"
+      ],
+      "きにしないで": [
+        "気にしないで"
+      ],
+      "問題ないよ": [
+        "問題ないよ"
+      ],
+      "もんだいないよ": [
+        "問題ないよ"
+      ],
+      "問題ありません": [
+        "問題ありません"
+      ],
+      "もんだいありません": [
+        "問題ありません"
+      ],
+      "そっか": [
+        "そっか"
+      ],
+      "なるほど": [
+        "なるほど"
+      ],
+      "了解": [
+        "了解"
+      ],
+      "りょうかい": [
+        "了解",
+        "りょうかい"
+      ],
+      "わかった": [
+        "わかった",
+        "分かった"
+      ],
+      "分かった": [
+        "分かった"
+      ],
+      "承知した": [
+        "承知した"
+      ],
+      "しょうちした": [
+        "承知した"
+      ],
+      "うん": [
+        "うん"
+      ],
+      "もちろん": [
+        "もちろん"
+      ],
+      "その通り": [
+        "その通り"
+      ],
+      "そのとおり": [
+        "その通り"
+      ],
+      "そうだよ": [
+        "そうだよ"
+      ],
+      "そうです": [
+        "そうです"
+      ],
+      "いや": [
+        "いや"
+      ],
+      "違うよ": [
+        "違うよ"
+      ],
+      "ちがうよ": [
+        "違うよ"
+      ],
+      "ちがう": [
+        "ちがう"
+      ],
+      "まだだよ": [
+        "まだだよ"
+      ],
+      "またね": [
+        "またね"
+      ],
+      "じゃあね": [
+        "じゃあね"
+      ],
+      "おやすみ": [
+        "おやすみ"
+      ],
+      "ばいばい": [
+        "ばいばい"
+      ],
+      "失礼します": [
+        "失礼します"
+      ],
+      "しつれいします": [
+        "失礼します"
+      ],
+      "元気？": [
+        "元気？"
+      ],
+      "げんき": [
+        "元気？",
+        "元気"
+      ],
+      "元気": [
+        "元気？",
+        "元気"
+      ],
+      "元気かい？": [
+        "元気かい？"
+      ],
+      "げんきかい": [
+        "元気かい？"
+      ],
+      "元気ですか": [
+        "元気ですか"
+      ],
+      "げんきですか": [
+        "元気ですか"
+      ],
+      "調子どう": [
+        "調子どう"
+      ],
+      "ちょうしどう": [
+        "調子どう"
+      ],
+      "調子はどう": [
+        "調子はどう"
+      ],
+      "ちょうしはどう": [
+        "調子はどう"
+      ],
+      "大丈夫？": [
+        "大丈夫？"
+      ],
+      "だいじょうぶ": [
+        "大丈夫？",
+        "大丈夫"
+      ],
+      "大丈夫": [
+        "大丈夫"
+      ],
+      "元気だよ": [
+        "元気だよ"
+      ],
+      "げんきだよ": [
+        "元気だよ"
+      ],
+      "元気です": [
+        "元気です"
+      ],
+      "げんきです": [
+        "元気です"
+      ],
+      "元気だね": [
+        "元気だね"
+      ],
+      "げんきだね": [
+        "元気だね"
+      ],
+      "もちろん元気だよ": [
+        "もちろん元気だよ"
+      ],
+      "もちろんげんきだよ": [
+        "もちろん元気だよ"
+      ],
+      "もう一回": [
+        "もう一回"
+      ],
+      "もういっかい": [
+        "もう一回"
+      ],
+      "もういちど": [
+        "もういちど",
+        "もう一度"
+      ],
+      "もう一度": [
+        "もう一度"
+      ],
+      "聞こえなかった": [
+        "聞こえなかった"
+      ],
+      "きこえなかった": [
+        "聞こえなかった"
+      ],
+      "わからなかった": [
+        "わからなかった"
+      ],
+      "続けて": [
+        "続けて"
+      ],
+      "つづけて": [
+        "続けて"
+      ],
+      "続きを教えて": [
+        "続きを教えて"
+      ],
+      "つづきをおしえて": [
+        "続きを教えて"
+      ],
+      "もっと詳しく": [
+        "もっと詳しく"
+      ],
+      "もっとくわしく": [
+        "もっと詳しく"
+      ],
+      "詳しく教えて": [
+        "詳しく教えて"
+      ],
+      "くわしくおしえて": [
+        "詳しく教えて"
+      ]
+    },
+    "concept_to_entries": {
+      "concept:casual_greeting": [
+        "やあ",
+        "よう",
+        "どうも"
+      ],
+      "concept:greeting": [
+        "こんにちは",
+        "お疲れさま",
+        "お疲れ様"
+      ],
+      "concept:evening_greeting": [
+        "こんばんは"
+      ],
+      "concept:morning_greeting": [
+        "おはよう",
+        "おはようございます"
+      ],
+      "concept:thanks_reply": [
+        "どうも",
+        "どういたしまして",
+        "いえいえ",
+        "こちらこそ"
+      ],
+      "concept:thanks": [
+        "ありがとう",
+        "ありがとうございます",
+        "ありがと",
+        "助かった"
+      ],
+      "concept:apology": [
+        "ごめん",
+        "ごめんなさい",
+        "すみません",
+        "失礼しました"
+      ],
+      "concept:apology_reply": [
+        "大丈夫だよ",
+        "大丈夫です",
+        "気にしないで",
+        "問題ないよ",
+        "問題ありません"
+      ],
+      "concept:fine_reply": [
+        "大丈夫だよ",
+        "大丈夫です",
+        "元気だよ",
+        "元気です",
+        "元気だね",
+        "もちろん元気だよ"
+      ],
+      "concept:acknowledgement": [
+        "そっか",
+        "なるほど",
+        "了解",
+        "りょうかい",
+        "わかった",
+        "分かった",
+        "承知した"
+      ],
+      "concept:affirmation": [
+        "わかった",
+        "分かった",
+        "うん",
+        "もちろん",
+        "その通り",
+        "そうだよ",
+        "そうです",
+        "もちろん元気だよ"
+      ],
+      "concept:negation": [
+        "いや",
+        "違うよ",
+        "ちがう",
+        "まだだよ"
+      ],
+      "concept:farewell": [
+        "またね",
+        "じゃあね",
+        "おやすみ",
+        "ばいばい",
+        "失礼します"
+      ],
+      "concept:social_question": [
+        "元気？",
+        "元気かい？",
+        "元気ですか",
+        "調子どう",
+        "調子はどう",
+        "大丈夫？"
+      ],
+      "concept:positive_state": [
+        "元気",
+        "大丈夫"
+      ],
+      "concept:request_repeat": [
+        "もう一回",
+        "もういちど",
+        "もう一度",
+        "聞こえなかった",
+        "わからなかった"
+      ],
+      "concept:continue_request": [
+        "続けて",
+        "続きを教えて",
+        "もっと詳しく",
+        "詳しく教えて"
+      ]
+    },
+    "relation_by_type": {
+      "hyponym": [
+        "concept:social_exchange",
+        "concept:greeting"
+      ],
+      "hypernym": [
+        "concept:greeting",
+        "concept:casual_greeting",
+        "concept:morning_greeting",
+        "concept:evening_greeting",
+        "concept:thanks",
+        "concept:thanks_reply",
+        "concept:apology",
+        "concept:apology_reply",
+        "concept:acknowledgement",
+        "concept:affirmation",
+        "concept:negation",
+        "concept:farewell",
+        "concept:social_question",
+        "concept:fine_reply",
+        "concept:request_repeat",
+        "concept:continue_request"
+      ],
+      "related_to": [
+        "concept:greeting",
+        "concept:casual_greeting",
+        "concept:thanks",
+        "concept:thanks_reply",
+        "concept:apology",
+        "concept:apology_reply",
+        "concept:acknowledgement",
+        "concept:affirmation",
+        "concept:negation",
+        "concept:farewell",
+        "concept:social_question",
+        "concept:positive_state",
+        "concept:fine_reply",
+        "concept:request_repeat",
+        "concept:continue_request"
+      ]
+    },
+    "relation_target_to_sources": {
+      "concept:greeting": [
+        "concept:social_exchange",
+        "concept:casual_greeting",
+        "concept:morning_greeting",
+        "concept:evening_greeting",
+        "concept:acknowledgement",
+        "concept:farewell",
+        "concept:social_question"
+      ],
+      "concept:thanks": [
+        "concept:social_exchange",
+        "concept:thanks_reply"
+      ],
+      "concept:thanks_reply": [
+        "concept:social_exchange",
+        "concept:thanks"
+      ],
+      "concept:apology": [
+        "concept:social_exchange",
+        "concept:apology_reply"
+      ],
+      "concept:apology_reply": [
+        "concept:social_exchange",
+        "concept:apology"
+      ],
+      "concept:acknowledgement": [
+        "concept:social_exchange",
+        "concept:casual_greeting",
+        "concept:thanks_reply",
+        "concept:affirmation"
+      ],
+      "concept:affirmation": [
+        "concept:social_exchange",
+        "concept:acknowledgement",
+        "concept:negation",
+        "concept:fine_reply"
+      ],
+      "concept:negation": [
+        "concept:social_exchange"
+      ],
+      "concept:farewell": [
+        "concept:social_exchange"
+      ],
+      "concept:social_question": [
+        "concept:social_exchange",
+        "concept:greeting",
+        "concept:positive_state",
+        "concept:fine_reply"
+      ],
+      "concept:fine_reply": [
+        "concept:social_exchange",
+        "concept:apology_reply",
+        "concept:affirmation",
+        "concept:social_question",
+        "concept:positive_state"
+      ],
+      "concept:request_repeat": [
+        "concept:social_exchange",
+        "concept:continue_request"
+      ],
+      "concept:continue_request": [
+        "concept:social_exchange",
+        "concept:request_repeat"
+      ],
+      "concept:social_exchange": [
+        "concept:greeting",
+        "concept:thanks",
+        "concept:thanks_reply",
+        "concept:apology",
+        "concept:apology_reply",
+        "concept:acknowledgement",
+        "concept:affirmation",
+        "concept:negation",
+        "concept:farewell",
+        "concept:social_question",
+        "concept:fine_reply",
+        "concept:request_repeat",
+        "concept:continue_request"
+      ],
+      "concept:casual_greeting": [
+        "concept:greeting"
+      ],
+      "concept:morning_greeting": [
+        "concept:greeting"
+      ],
+      "concept:evening_greeting": [
+        "concept:greeting"
+      ],
+      "concept:positive_state": [
+        "concept:affirmation",
+        "concept:social_question",
+        "concept:fine_reply"
+      ]
+    }
+  }
+}

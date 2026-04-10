@@ -44,6 +44,31 @@ DEFAULT_TEACHER_PROFILES: Dict[str, Dict[str, Any]] = {
         "max_output_tokens": 900,
         "temperature": 0.2,
     },
+    "lexicon_enricher": {
+        "system_prompt": (
+            "You enrich an auxiliary Japanese lexicon for a relation-first language system. "
+            "Return JSON only. For each unknown term, provide a short safe lexical entry that can be stored separately from the base dictionary."
+        ),
+        "user_prompt_template": (
+            "Generate auxiliary lexicon entries from the following payload. Return JSON with keys: "
+            "entries, notes. entries must be an array of objects with keys: "
+            "surface, reading, pos, category, short_definition, surface_forms, related_terms.\n\n{payload_json}"
+        ),
+        "max_output_tokens": 1200,
+        "temperature": 0.2,
+    },
+    "input_generator": {
+        "system_prompt": (
+            "You generate diverse Japanese user utterances for a relation-first learning loop. "
+            "Return JSON only. Prefer short, natural, varied prompts that are safe and useful for training."
+        ),
+        "user_prompt_template": (
+            "Generate learning inputs from the following payload. Return JSON with keys: "
+            "inputs, notes. inputs must be an array of short Japanese user utterances only.\n\n{payload_json}"
+        ),
+        "max_output_tokens": 1200,
+        "temperature": 0.8,
+    },
 }
 
 

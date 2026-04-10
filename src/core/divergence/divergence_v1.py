@@ -21,6 +21,7 @@ LOW_SIGNAL_CONCEPT_CATEGORIES = {
     "adnominal",
 }
 QUESTION_SURFACES = {"何", "なに", "どこ", "誰", "いつ", "どう", "どれ"}
+LOW_SIGNAL_SURFACES = {"かい", "か", "ね", "よ", "な", "さ", "ぞ", "わ", "も"}
 ASCII_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+\-./]*")
 KATAKANA_WORD_RE = re.compile(r"[ァ-ヶヴー]{2,}")
 QUOTED_TERM_RE = re.compile(r"[「『\"'](?P<term>.+?)[」』\"']")
@@ -199,6 +200,8 @@ def _match_seeds(text: str, index: RelationIndex, *, max_matches: int = 16) -> L
             return
         quoted = _surface_is_quoted(normalized, start, end)
         if surface in QUESTION_SURFACES and reason != "exact_surface":
+            return
+        if surface in LOW_SIGNAL_SURFACES and reason != "exact_surface" and not quoted:
             return
         if _is_single_kana(surface) and reason != "exact_surface" and not quoted:
             return

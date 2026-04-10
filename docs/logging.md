@@ -82,12 +82,32 @@ v4 ではログを次の 3 層に分けます。
 推奨ファイル:
 
 - `runtime/traces/latest.jsonl`
+- `runtime/traces/latest.session.json`
 
 特徴:
 
 - 人間可読より機械再利用を優先
 - 中間状態を段階別に保存
 - relation path と timing と score を含む
+- 固定設定値や startup 情報は session manifest へ逃がし、各 trace 行へ重複記録しない
+
+---
+
+### 3.4 episode record
+
+loop-learning 用の学習記録です。  
+trace をそのまま複製する場所ではなく、**学習判断と改善材料を圧縮して残す層**です。
+
+推奨ファイル:
+
+- `runtime/episodes/latest.jsonl`
+
+特徴:
+
+- `episode_index` と `turn_id` を持つ
+- trace 本体は `trace_ref` で参照する
+- decision / reward / learning summary / unknown word enrichment を残す
+- divergence 候補列や relation path の完全複製はしない
 
 ---
 
@@ -370,3 +390,12 @@ LSLM v4 のログは、
 
 を後から明確に比較できます。  
 v4 においてログは後付けではなく、最初から中核機能です。
+
+
+## 14. trace mode の責務
+
+- `minimal` は件数中心の要約を残す
+- `standard` は比較実験に必要な候補と要約を残す
+- `deep_trace` は explored relation や slot evidence の生データを残す
+
+つまり `standard` は **読むための trace**、`deep_trace` は **掘るための trace** として分けます。

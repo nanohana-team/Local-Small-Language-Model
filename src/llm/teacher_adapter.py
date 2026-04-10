@@ -4,9 +4,9 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Dict, Mapping
 
-from .base import LLMCallResult, TeacherProfile
+from .base import LLMCallResult
 from .config import load_environment, load_llm_order, load_teacher_profiles
 
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -30,6 +30,12 @@ class ExternalTeacherOrchestrator:
 
     def teach_turn(self, payload: Mapping[str, Any]) -> LLMCallResult:
         return self._run("teacher", payload)
+
+    def generate_inputs(self, payload: Mapping[str, Any]) -> LLMCallResult:
+        return self._run("input_generator", payload)
+
+    def run_profile(self, mode: str, payload: Mapping[str, Any]) -> LLMCallResult:
+        return self._run(mode, payload)
 
     def _run(self, mode: str, payload: Mapping[str, Any]) -> LLMCallResult:
         profile = self.profiles.get(mode)
@@ -65,7 +71,7 @@ class ExternalTeacherOrchestrator:
                     parsed=parsed,
                     latency_ms=round(latency_ms, 3),
                     prompt_version=profile.prompt_version,
-                    teacher_name=f"{adapter.provider}:{model_name}" if mode == "teacher" else None,
+                    teacher_name=f"{adapter.provider}:{model_name}" if mode in {"teacher", "input_generator"} else None,
                 )
             except Exception as exc:  # pragma: no cover - network / provider exceptions vary.
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -76,7 +82,7 @@ class ExternalTeacherOrchestrator:
             raw_text="",
             error=last_error or "no_model_available",
             prompt_version=profile.prompt_version,
-            teacher_name=(f"fallback_exhausted:{self.model_order[-1]}" if self.model_order and mode == "teacher" else None),
+            teacher_name=(f"fallback_exhausted:{self.model_order[-1]}" if self.model_order and mode in {"teacher", "input_generator"} else None),
         )
 
     @staticmethod

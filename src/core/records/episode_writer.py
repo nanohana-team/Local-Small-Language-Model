@@ -14,7 +14,7 @@ except ZoneInfoNotFoundError:
 
 
 class EpisodeWriter:
-    """Append-only JSONL writer for external teacher / evaluator episodes."""
+    """Append-only JSONL writer for loop-learning episode records."""
 
     def __init__(self, runtime_dir: str | Path = "runtime", *, rotate_latest: bool = True) -> None:
         self.runtime_dir = Path(runtime_dir)
@@ -26,7 +26,10 @@ class EpisodeWriter:
 
     def write(self, payload: Mapping[str, Any]) -> None:
         serializable = dict(payload)
-        serializable.setdefault("timestamp_jst", datetime.now(JST).isoformat())
+        serializable.setdefault("record_type", "episode")
+        serializable.setdefault("schema_version", "loop_learning_episode_v3")
+        if not serializable.get("timestamp_jst"):
+            serializable["timestamp_jst"] = datetime.now(JST).isoformat()
         with self.latest_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(serializable, ensure_ascii=False) + "\n")
 
@@ -40,3 +43,6 @@ class EpisodeWriter:
             archive_path = latest_path.with_name(f"{stamp}_{counter}{latest_path.suffix}")
             counter += 1
         shutil.move(str(latest_path), str(archive_path))
+
+
+__all__ = ["EpisodeWriter"]

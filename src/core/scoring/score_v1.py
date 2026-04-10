@@ -13,7 +13,7 @@ from src.core.planning.plan_v1 import PlanV1
 from src.core.slotting.slot_v1 import SlotResult
 
 DEFAULT_SCORING_CONFIG: Dict[str, Any] = {
-    "version": 1,
+    "version": 2,
     "latency": {
         "target_ms": 500.0,
         "hard_limit_ms": 3000.0,
@@ -23,6 +23,11 @@ DEFAULT_SCORING_CONFIG: Dict[str, Any] = {
         "accepted_relation_target": 4,
         "accepted_concept_target": 4,
         "divergence_candidate_target": 6,
+        "good_reward": 0.82,
+        "mixed_reward": 0.65,
+        "promote_floor": 0.80,
+        "review_floor": 0.55,
+        "weak_axis_threshold": 0.58,
     },
     "weights": {
         "plan_fitness": 0.15,
@@ -35,6 +40,41 @@ DEFAULT_SCORING_CONFIG: Dict[str, Any] = {
         "input_retention": 0.07,
         "latency_fitness": 0.03,
         "dangling_penalty": 0.02,
+    },
+    "external_reward": {
+        "internal_weight": 0.8,
+        "external_weight": 0.2,
+        "evaluator_mix": 0.8,
+        "teacher_mix": 0.2,
+    },
+    "trace": {
+        "minimal": {
+            "divergence_candidates": 4,
+            "seed_matches": 4,
+            "explored_relations": 0,
+            "convergence_candidates": 4,
+            "rejected_candidates": 0,
+            "accepted_relations": 6,
+            "rejected_relations": 0,
+        },
+        "standard": {
+            "divergence_candidates": 12,
+            "seed_matches": 12,
+            "explored_relations": 48,
+            "convergence_candidates": 8,
+            "rejected_candidates": 8,
+            "accepted_relations": 16,
+            "rejected_relations": 16,
+        },
+        "deep_trace": {
+            "divergence_candidates": -1,
+            "seed_matches": -1,
+            "explored_relations": -1,
+            "convergence_candidates": -1,
+            "rejected_candidates": -1,
+            "accepted_relations": -1,
+            "rejected_relations": -1,
+        },
     },
 }
 
@@ -120,45 +160,36 @@ def _load_scoring_config_cached(path_str: str | None) -> tuple[Dict[str, Any], s
     return config, resolved_path
 
 
-def load_scoring_config(config_path: str | None = None) -> tuple[Dict[str, Any], str | None]:
-    return _load_scoring_config_cached(config_path)
+def load_scoring_config(path: str | None = None) -> tuple[Dict[str, Any], str | None]:
+    return _load_scoring_config_cached(path)
 
 
-def _slot_label(slot: Any) -> str | None:
-    if isinstance(slot, Mapping):
-        label = slot.get("label")
-        if label:
-            return str(label)
+def _count_strong_seeds(divergence: DivergenceResult, strong_seed_threshold: float) -> int:
+    return sum(1 for match in divergence.seed_matches if float(match.score) >= strong_seed_threshold)
+
+
+def _slot_label(slot_value: Any) -> str | None:
+    if isinstance(slot_value, Mapping):
+        label = slot_value.get("label")
+        return str(label) if label else None
     return None
 
 
-def _count_strong_seeds(divergence: DivergenceResult, threshold: float) -> int:
-    return sum(1 for match in divergence.seed_matches if float(getattr(match, "score", 0.0)) >= threshold)
-
-
-def _response_mentions(value: str | None, response: str) -> bool:
-    if not value:
+def _response_mentions(label: str | None, response_text: str) -> bool:
+    if not label:
         return False
-    return str(value) in response
+    return str(label) in str(response_text or "")
 
 
 def _plan_fitness(ctx: _ScoreContext) -> float:
-    if not ctx.plan.needs_clarification:
-        score = 1.0
-        if ctx.plan.fallback_reason == "unknown_words_dominant":
-            score -= 0.12
-        if ctx.plan.intent == "define" and ctx.plan.unknown_focus:
-            score += 0.02
-        return _clamp(score)
-
-    if ctx.plan.fallback_reason == "unknown_focus_term" and ctx.plan.unknown_focus:
-        return 0.68
-    if ctx.plan.fallback_reason == "unknown_words_dominant":
-        return 0.62
-    topic = ctx.slots.filled_slots.get("topic")
-    if topic is not None:
-        return 0.58
-    return 0.45
+    score = 0.62 if ctx.plan.needs_clarification else 0.88
+    if ctx.plan.intent == "define" and ctx.plan.unknown_focus:
+        score += 0.08
+    if ctx.plan.required_slots:
+        score += 0.04
+    if ctx.plan.needs_clarification and ctx.plan.unknown_focus:
+        score += 0.06
+    return _clamp(score)
 
 
 def _relation_coverage(ctx: _ScoreContext) -> float:
@@ -258,7 +289,7 @@ def _slot_fitness(ctx: _ScoreContext) -> float:
         evidence_bonus += 0.05
     score = _clamp(fill_ratio + evidence_bonus)
     if ctx.plan.needs_clarification and ctx.plan.unknown_focus:
-        score = max(score, 0.55)
+        score = max(score, 0.60)
     return score
 
 
@@ -339,14 +370,18 @@ def _weakest_axes(scores: Mapping[str, float]) -> list[str]:
     return [name for name, _ in ordered]
 
 
-def _build_feedback(scores: Mapping[str, float]) -> Dict[str, Any]:
+def _build_feedback(scores: Mapping[str, float], config: Mapping[str, Any]) -> Dict[str, Any]:
+    thresholds = config.get("thresholds", {}) if isinstance(config.get("thresholds"), Mapping) else {}
     weakest_axes = _weakest_axes(scores)
     suggestions = [AXIS_REMEDIES[name] for name in weakest_axes if name in AXIS_REMEDIES]
     reward_total = sum(_axis_quality(name, float(value)) for name, value in scores.items()) / max(1, len(scores))
-    if reward_total >= 0.82:
+    good_reward = float(thresholds.get("good_reward", 0.82))
+    mixed_reward = float(thresholds.get("mixed_reward", 0.65))
+    weak_axis_threshold = float(thresholds.get("weak_axis_threshold", 0.58))
+    if reward_total >= good_reward:
         label = "good"
         text = "内部評価としてはかなり安定。弱い軸を局所改善すれば次に進める。"
-    elif reward_total >= 0.65:
+    elif reward_total >= mixed_reward:
         label = "mixed"
         text = f"概ね通っているけれど、{', '.join(weakest_axes[:2])} がまだ弱い。"
     else:
@@ -356,20 +391,95 @@ def _build_feedback(scores: Mapping[str, float]) -> Dict[str, Any]:
         "label": label,
         "text": text,
         "weakest_axes": weakest_axes,
+        "weak_axis_threshold": weak_axis_threshold,
         "suggestions": suggestions,
     }
 
 
-def _build_details(ctx: _ScoreContext, scores: Mapping[str, float]) -> Dict[str, Any]:
+def _blocking_issues(ctx: _ScoreContext, scores: Mapping[str, float], response_text: str) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    topic_label = _slot_label(ctx.slots.filled_slots.get("topic"))
+    if ctx.plan.required_slots and ctx.slots.missing_slots:
+        issues.append({
+            "code": "missing_required_slots",
+            "severity": "high",
+            "detail": f"missing={ctx.slots.missing_slots}",
+        })
+    if ctx.plan.unknown_focus:
+        if ctx.plan.intent == "define" and ctx.plan.unknown_focus not in str(response_text or ""):
+            issues.append({
+                "code": "unknown_focus_not_retained",
+                "severity": "critical",
+                "detail": f"unknown_focus={ctx.plan.unknown_focus}",
+            })
+        elif ctx.plan.fallback_reason == "unknown_focus_term" and ctx.plan.unknown_focus not in str(response_text or ""):
+            issues.append({
+                "code": "unknown_focus_not_retained",
+                "severity": "critical",
+                "detail": f"unknown_focus={ctx.plan.unknown_focus}",
+            })
+    if ctx.plan.needs_clarification and not topic_label and not ctx.plan.unknown_focus:
+        issues.append({
+            "code": "topic_not_recovered",
+            "severity": "critical",
+            "detail": "clarification required but no topic or unknown focus was preserved",
+        })
+    if ctx.plan.intent == "compare":
+        explicit_pair = [
+            str(surface)
+            for surface in ctx.slots.slot_evidence.get("explicit_seed_pair", [])
+            if isinstance(surface, str) and surface
+        ][:2]
+        comparison_label = _slot_label(ctx.slots.filled_slots.get("comparison"))
+        if len(explicit_pair) >= 2 and comparison_label and comparison_label != explicit_pair[1]:
+            issues.append({
+                "code": "compare_focus_shift",
+                "severity": "high",
+                "detail": f"expected={explicit_pair[1]} actual={comparison_label}",
+            })
+    if scores.get("grammar_fitness", 1.0) < 0.45:
+        issues.append({
+            "code": "surface_unstable",
+            "severity": "medium",
+            "detail": f"grammar_fitness={scores.get('grammar_fitness')}",
+        })
+    if scores.get("input_retention", 1.0) < 0.40:
+        issues.append({
+            "code": "input_retention_low",
+            "severity": "high",
+            "detail": f"input_retention={scores.get('input_retention')}",
+        })
+    return issues
+
+
+def _build_details(ctx: _ScoreContext, scores: Mapping[str, float], reward: Mapping[str, float | None]) -> Dict[str, Any]:
     thresholds = ctx.config.get("thresholds", {}) if isinstance(ctx.config.get("thresholds"), Mapping) else {}
     strong_seed_threshold = float(thresholds.get("strong_seed_score", 0.25))
     accepted_relations = list(ctx.convergence.accepted_relations or [])
     priority_set = set(ctx.plan.relation_type_priority or [])
     priority_hits = sum(1 for relation in accepted_relations if str(relation.get("type")) in priority_set)
+    blocking_issues = _blocking_issues(ctx, scores, ctx.response_text)
+    axis_scores = {name: round(float(value), 6) for name, value in scores.items()}
+    axis_quality = {name: round(_axis_quality(name, float(value)), 6) for name, value in scores.items()}
+    promote_floor = float(thresholds.get("promote_floor", 0.80))
+    review_floor = float(thresholds.get("review_floor", 0.55))
+    reward_total = float(reward.get("total") or 0.0)
+    if any(issue.get("severity") == "critical" for issue in blocking_issues):
+        decision = "reject"
+    elif reward_total >= promote_floor:
+        decision = "promote"
+    elif reward_total >= review_floor:
+        decision = "review"
+    else:
+        decision = "reject"
     return {
-        "score_version": "v1.1",
+        "score_version": "v2.0",
         "config_path": ctx.config_path,
         "config_version": ctx.config.get("version", 1),
+        "axis_breakdown": axis_scores,
+        "axis_quality": axis_quality,
+        "blocking_issues": blocking_issues,
+        "decision": decision,
         "diagnostics": {
             "seed_count": len(ctx.divergence.seed_matches),
             "strong_seed_count": _count_strong_seeds(ctx.divergence, strong_seed_threshold),
@@ -395,7 +505,7 @@ def _build_details(ctx: _ScoreContext, scores: Mapping[str, float]) -> Dict[str,
 
 
 def _compute_scores_from_context(ctx: _ScoreContext) -> Dict[str, float]:
-    scores = {
+    return {
         "plan_fitness": round(_plan_fitness(ctx), 6),
         "relation_coverage": round(_relation_coverage(ctx), 6),
         "divergence_relevance": round(_divergence_relevance(ctx), 6),
@@ -407,7 +517,6 @@ def _compute_scores_from_context(ctx: _ScoreContext) -> Dict[str, float]:
         "latency_fitness": round(_latency_fitness(ctx.total_ms, ctx.config), 6),
         "dangling_rate": round(_dangling_rate(ctx.validation_report), 6),
     }
-    return scores
 
 
 def _compute_reward(scores: Mapping[str, float], config: Mapping[str, Any]) -> Dict[str, float | None]:
@@ -453,8 +562,8 @@ def score_turn_v1(
     )
     scores = _compute_scores_from_context(ctx)
     reward = _compute_reward(scores, config)
-    feedback = _build_feedback(scores)
-    details = _build_details(ctx, scores)
+    feedback = _build_feedback(scores, config)
+    details = _build_details(ctx, scores, reward)
     return TurnScoreV1(scores=scores, reward=reward, feedback=feedback, details=details)
 
 

@@ -2,65 +2,16 @@
 
 ## 1. この文書の役割
 
-この文書は、LSLM v4 の **全体構造** を定義します。  
-`docs/philosophy.md` が「何を目指すか」を定義し、`docs/dictionary_schema.md` が「辞書をどう設計するか」を定義し、`docs/relation_design.md` が「relation をどう定義するか」を定義するのに対し、本書は **それらをリポジトリ構成と処理責務に落とした地図** です。
+この文書は、LSLM v4 の **処理責務とリポジトリ配置** を対応づける地図です。
+
+- `docs/philosophy.md` は何を目指すか
+- `docs/relation_design.md` は relation をどう定義するか
+- `docs/dictionary_schema.md` は辞書をどう定義するか
+- 本書はそれを **どのファイルが担うか** に落とします
 
 ---
 
-## 2. v4 の要約
-
-LSLM v4 は、relation を中核に持つ辞書ネットワークを基盤にして応答を組み立てる軽量言語システムです。  
-目標は、次の 4 つを同時に成立させることにあります。
-
-1. **低資源で動くこと**  
-   CPU を含む非力な環境でも成立すること。
-2. **内部過程を追跡できること**  
-   なぜその応答になったかを段階別に見えること。
-3. **段階ごとに改善できること**  
-   Plan・Divergence・Convergence・Slot・Surface を個別に検証・修正できること。
-4. **relation を品質管理できること**  
-   どの接続が使われ、どの接続が欠け、どの接続が危険かを追えること。
-
----
-
-## 3. 現在の実装資産
-
-現リポジトリに実在している主要資産は次の通りです。
-
-### 3.1 辞書 I/O
-
-- `src/core/io/lsd_lexicon.py`
-  - JSON / LSD / LSDX のロード
-  - 辞書コンテナ正規化
-  - 索引自動生成
-  - バイナリ保存
-  - Indexed 辞書のメモリマップ読込
-
-### 3.2 辞書変換ツール
-
-- `tools/convert_dict_to_binary.py`
-  - 辞書形式変換
-  - 再ロード検証
-  - サイズ比較
-
-### 3.3 設定
-
-- `settings/LLM_order.yaml`
-  - 外部 LLM の利用順序定義
-
-### 3.4 設計文書
-
-- `docs/*.md`
-  - v4 の思想・relation 仕様・辞書仕様・実装順序・ログ・報酬設計
-
-つまり現在の v4 は、**辞書基盤と設計仕様が先に立っている世代** です。  
-会話エンジン本体を急いで増築するのではなく、最初に土台の責務分離を固定する段階にあります。
-
----
-
-## 4. システム全体像
-
-### 4.1 論理パイプライン
+## 2. システム全体像
 
 ```text
 User Input
@@ -80,284 +31,227 @@ Surface Rendering
 Response
 ```
 
-### 4.2 横断サブシステム
+この縦パイプラインを、次の横断層が支えます。
 
-上記の主経路を、次の横断系が支えます。
-
-- Dictionary System
-- Relation System
-- Runtime State
+- Dictionary / Relation
 - Logging / Trace
 - Scoring / Reward
-- Evaluator Adapter
-- Config / Policy
+- External evaluator / teacher
+- Runtime records
+- Settings / Policy
 
 ---
 
-## 5. 主要責務
+## 3. 入口の責務
 
-### 5.1 Input Analysis
+## 3.1 `main.py`
 
-入力から次を抽出します。
+トップレベル入口です。
 
-- 発話タイプ
-- 主題候補
-- 制約条件
-- 感情ヒント
-- 会話継続性
-- 未知語
+責務:
 
-ここでは **まだ答えを作らない** ことが重要です。  
-役割は「入力理解のための特徴化」に留めます。
+- `chat`
+- `loop-learning`
 
-### 5.2 Plan
+のモード選択だけを行います。
 
-入力に対して、何を達成する返答にするかを決めます。
+ここに重いロジックは持たせません。
 
-例:
+## 3.2 `src/apps/chat_v1.py`
 
-- 質問に答える
-- 理由を説明する
-- 比較する
-- 手順を提示する
-- 感情に寄り添う
-- 不足情報を確認する
+短い対話実行と single-turn 実行を担当します。
 
-Plan は自然文ではなく、**応答意図の構造体** です。
+責務:
 
-### 5.3 Divergence
+- エンジン起動
+- 1 turn 実行
+- interactive chat
+- trace 記録
 
-辞書ネットワーク上で relation を順方向へたどり、関連候補を広げます。  
-ここでは量を出すことが仕事であり、まだ最終候補を決めません。
+## 3.3 `src/apps/loop_learning_v1.py`
 
-使う主な情報:
+学習エピソード収集を担当します。
 
-- relation
-- relation type priority
-- axis 近傍
-- grammar 制約
-- category / hierarchy
-- slot 要求
+責務:
 
-### 5.4 Convergence
+- dataset / inline / auto-input の収集
+- episode 単位の turn 実行
+- unknown word overlay 更新
+- episode record 保存
+- run summary 保存
 
-Divergence で広げた候補から、現在の Plan を満たすのに必要な relation と要素だけを残します。
+## 3.4 `src/apps/cli_common.py`
 
-主な判定観点:
+CLI 共通引数と trace mode 解決の薄い共通層です。
 
-- Plan 適合
-- relation path の説明可能性
-- 入力保持
-- 矛盾の少なさ
-- 冗長性の低さ
-- スロット充足への寄与
-- 計算コスト
+責務:
 
-### 5.5 Slot Filling
-
-「誰が・何を・どうした・なぜ・どこで・いつ」のような意味役割を埋めます。  
-ここで応答の意味骨格が確定します。
-
-### 5.6 Surface Rendering
-
-確定済みの意味骨格を、日本語として自然な文に変換します。  
-この層は **意味を新規に決定してはいけません**。  
-意味決定は Plan / Divergence / Convergence / Slot 側で終わっている必要があります。
+- chat / loop-learning 間で共通の engine 引数を揃える
+- `--debug` と `trace_mode` の整合を保つ
 
 ---
 
-## 6. relation 中心アーキテクチャ
+## 4. `src/core/` の責務
 
-v4 の最重要点は、辞書を単なる知識倉庫ではなく **relation を持つ意味探索空間** として扱うことです。
+### `src/core/io/`
 
-### 6.1 辞書に含まれるもの
+辞書 I/O と正規化。
 
-- concept
-- lexical entry
-- sense
-- surface word
-- relation
-- slot frame
-- grammar rule
-- axis
-- index
+主役:
 
-### 6.2 relation system が担うもの
+- `lsd_lexicon.py`
 
-- relation type の規約
-- relation direction の規約
-- inverse 規約
-- relation 索引
-- dangling target 検証
-- import review からの relation 昇格
+### `src/core/relation/`
 
-### 6.3 辞書に含めないもの
+relation schema / index / validation。
 
-- 今回の入力にだけ依存する一時状態
-- 現ターン専用の採用候補・棄却候補
-- 今回たどった relation path そのもの
-- ログや報酬の実測値
-- 実験しきい値や LLM 利用順序
+### `src/core/planning/`
 
-この境界を崩すと、辞書が「知識ネットワーク」ではなく「雑多な状態の墓場」になるため、v4 は破綻します。
+Plan 生成。
 
----
+### `src/core/divergence/`
 
-## 7. データ領域の分離
+入力解析と relation 発散。
 
-LSLM v4 では、少なくとも次の 4 領域を分離します。
+### `src/core/convergence/`
 
-```text
-Dictionary  = 安定知識
-Runtime     = 現ターンの状態
-Records     = ログ・評価・学習記録
-Settings    = しきい値・順序・ポリシー
-```
+候補収束と採用判定。
 
-### 7.1 Dictionary
+### `src/core/slotting/`
 
-安定して再利用される知識ネットワーク。  
-relation 本体はここに属します。
+意味役割充填。
 
-### 7.2 Runtime
+### `src/core/surface/`
 
-入力から応答までの一時状態。  
-relation の探索候補や path 候補はここに属します。
+表層化。
 
-### 7.3 Records
+### `src/core/scoring/`
 
-実行結果を分析・再学習・比較するための保存領域。  
-explored relation path と accepted relation path はここへ残します。
+内部構造評価と reward 計算。
 
-### 7.4 Settings
+### `src/core/logging/`
 
-実験条件やしきい値、外部接続順序などを管理する領域。
+運用ログ / debug log / trace session manifest / trace shaping。
+
+### `src/core/records/`
+
+episode record、unknown overlay、improvement candidate など、保存系の圧縮レコード。
 
 ---
 
-## 8. リポジトリ構成の見方
+## 5. `src/llm/` の責務
 
-### 8.1 現在の構成
+外部 evaluator / teacher / provider adapter 群です。
 
-```text
-.
-├─ README.md
-├─ architecture.md
-├─ docs/
-├─ settings/
-├─ src/
-│  └─ core/
-│     └─ io/
-└─ tools/
-```
+原則:
 
-### 8.2 役割分担
-
-- `docs/`  
-  設計そのものを固定する層。
-- `settings/`  
-  実験条件と外部依存順序を差し替える層。
-- `src/core/io/`  
-  辞書の読込・保存・正規化という基盤層。
-- `tools/`  
-  開発補助・変換・検証を行う運用層。
-
-### 8.3 将来的に増えるべき層
-
-```text
-src/
-├─ apps/            # CLI / chat / learning entrypoints
-├─ core/
-│  ├─ io/           # 辞書I/O
-│  ├─ relation/     # relation schema / index / validation
-│  ├─ planning/     # plan生成
-│  ├─ divergence/   # 発散
-│  ├─ convergence/  # 収束
-│  ├─ slotting/     # slot充填
-│  ├─ surface/      # 表層化
-│  ├─ scoring/      # 内部評価
-│  └─ logging/      # trace / runtime log
-└─ llm/             # evaluator / teacher adapter
-```
-
-この将来構成は「すぐ全部作る」ためではなく、**責務混線を防ぐための設計上の置き場所** です。
+- 補助輪であり中核ではない
+- 辞書・relation ロジックを置かない
+- unavailable でもパイプラインが止まらないようにする
 
 ---
 
-## 9. 現行辞書実装と目標辞書設計の関係
+## 6. `tools/` の責務
 
-現行 `lsd_lexicon.py` が扱う辞書コンテナは、互換性と実用性を優先した **lexical entry 中心形式** です。  
-一方、v4 の思想上の中心は **concept + relation 中心の知識ネットワーク** にあります。
+## 6.1 統一入口
 
-この差は矛盾ではなく、段階的移行のための二層構造と考えます。
+### `tools/lexicon_cli.py`
 
-- **現在**: lexical entry を実装上の基本単位として扱う
-- **将来**: concept / relation / sense を意味上の中心に据える
-- **橋渡し**: lexical entry から concept を参照し、concept から relation をたどれるようにする
+辞書メンテナンス用の共通入口です。
 
-詳しい移行案は `docs/dictionary_schema.md` と `docs/relation_design.md` を参照してください。
+扱うサブコマンド:
 
----
+- `convert-to-binary`
+- `convert-from-binary`
+- `profile-load`
+- `augment-conversation`
+- `bootstrap-ja`
 
-## 10. ログと報酬の位置づけ
+## 6.2 個別ツール
 
-### 10.1 ログ
+### `tools/convert_dict_to_binary.py`
 
-ログは単なるデバッグ補助ではありません。  
-v4 では、ログは **思考過程の観測装置** です。
+辞書変換本体。
 
-最低限、以下を段階別に追える必要があります。
+### `tools/convert_binary_to_dict.py`
 
-- input_features
-- plan
-- divergence candidates
-- explored relations
-- convergence candidates
-- accepted relations
-- filled slots
-- surface plan
-- response
-- score / reward
-- timing
+辞書逆変換本体。
 
-### 10.2 報酬
+### `tools/profile_lexicon_load.py`
 
-報酬は `internal` / `external` / `total` の 3 系統を基本とします。
+ロード経路のプロファイル本体。
 
-- `internal`  
-  構造的に正しいか
-- `external`  
-  人間から見て良い応答か
-- `total`  
-  学習更新に使う統合値
+### `tools/augment_conversation_lexicon.py`
 
-これにより、構造の壊れと表層品質の崩れを分離して扱えます。
+会話 seed マージ専用。
+
+### `tools/bootstrap_japanese_lexicon.py`
+
+大規模な日本語辞書構築専用。
+
+方針:
+
+- 入口はまとめる
+- 重い実装本体は無理に合体させない
 
 ---
 
-## 11. v4 で絶対に崩してはいけない判断
+## 7. 設定と生成物の置き場
 
-1. 辞書と実行時状態を混ぜない
-2. relation を曖昧な関連語タグにしない
-3. Plan と Surface を混ぜない
-4. 発散と収束を 1 つのブラックボックスにしない
-5. ログを後付けにしない
-6. 外部 LLM を中核ロジックの代用品にしない
-7. setting 値をコードへ焼き込まない
-8. concept + relation 中心思想を、実装都合だけで捨てない
+## 7.1 `settings/`
+
+- `LLM_order.yaml`
+- `scoring_v1.yaml`
+- `teacher_profiles.yaml`
+
+実験条件や外部順序の置き場です。
+
+## 7.2 `runtime/`
+
+生成物専用です。
+
+主なサブディレクトリ:
+
+- `runtime/logs/`
+- `runtime/traces/`
+- `runtime/episodes/`
+- `runtime/learning_runs/`
+- `runtime/dictionaries/`
+- `runtime/cache/`
+
+これらはソースではなく、**実行結果・補助辞書・cache** を置く層です。
 
 ---
 
-## 12. 結論
+## 8. 境界の結論
 
-LSLM v4 のアーキテクチャは、
-**relation を持つ辞書ネットワークを中核に、意味決定・構造化・表層化・観測・評価を責務分離する構造** です。
+v4 のアーキテクチャで崩してはいけない線は次の 4 本です。
 
-現在のリポジトリはそのうち、特に
+1. `Dictionary` と `Runtime` を混ぜない
+2. `Trace` と `Episode` を混ぜない
+3. `App entrypoint` と `Core logic` を混ぜない
+4. `Tool entrypoint` と `Heavy implementation` を混ぜない
 
-- 辞書 I/O
-- 辞書形式変換
-- relation と辞書の設計仕様の固定
+---
 
-を先に整えた状態にあります。  
-ここから先は「機能を足す」ことよりも、**責務を壊さずに縦へ通すこと** が最優先になります。
+## 9. 今回の整理で固定したこと
+
+- `main.py` をアプリの共通入口として固定
+- `tools/lexicon_cli.py` を辞書メンテの共通入口として追加
+- `src/apps/cli_common.py` で CLI 引数を共通化
+- `runtime/` を生成物置き場として再定義
+- 過去の runtime 生成物はリポジトリ本体から外す方針を固定
+
+---
+
+## 10. 結論
+
+現時点の v4 は、
+
+- **アプリ入口**
+- **辞書メンテ入口**
+- **core ロジック**
+- **settings**
+- **runtime 生成物**
+
+の線を明確にした構造へ整理するのが最も壊れにくいです。

@@ -1,69 +1,57 @@
 # Local Small Language Model v4
 
-LSLM v4 は、巨大な LLM を小さく複製するプロジェクトではありません。  
-**低計算資源で動かせること**、**内部過程を追跡できること**、**辞書を知識ネットワークとして扱えること**を優先した、ホワイトボックス志向の軽量言語システムです。
+LSLM v4 は、巨大な LLM の縮小コピーではなく、**低計算資源でも追跡可能に動く relation-first の軽量言語システム**です。
 
-この世代の中核定義は次の二文です。
+この世代の中核定義は次の 2 文です。
 
 > **辞書は、ただの知識ではなく、知識のネットワークそのものである。**  
-> **relation は語句同士・概念同士の接続を定義する場である。**
+> **relation は語句同士・概念同士の接続規則である。**
 
-そのため v4 では、単語列をその場で統計的に吐き出すことよりも、
+そのため v4 では、最終応答だけでなく、
 
 - 入力をどう解釈したか
-- どの relation をたどって候補を広げたか
-- なぜその relation と候補を採用・棄却したか
-- どう意味構造を作り、どう日本語へ表層化したか
+- どの relation をたどったか
+- 何を残して何を捨てたか
+- どんな意味骨格から日本語を作ったか
 
-を分解・観測・改善できることを重視します。
+を観測できることを重視します。
 
-## 現在のリポジトリの位置づけ
+## このリポジトリの現在地
 
-このリポジトリは **v4 の土台を固める初期状態** です。  
-現時点で主に入っているのは、辞書 I/O、辞書変換ツール、LLM 使用順序設定、そして設計文書群です。
+この版は、v4 の最小縦スライスを **壊れにくい形へ整理した段階** です。
 
-つまり、いまの v4 は「すでに完成した会話エンジン」ではなく、
-**relation 中心の辞書アーキテクチャを破綻なく立ち上げるための最小骨格** として整理されています。
+主に次を含みます。
 
-## この版で残している中核資産
+- relation-first chat 実行
+- loop-learning 実行
+- trace / episode / learning summary の分離
+- LSD / LSDX 辞書 I/O
+- 辞書メンテナンス用 CLI
+- 設計文書群
 
-- `src/core/io/lsd_lexicon.py`  
-  JSON / LSD / LSDX 形式の辞書コンテナを正規化・保存・高速読込する I/O 中核。
-- `tools/convert_dict_to_binary.py`  
-  辞書を実行用バイナリへ変換する CLI。
-- `settings/LLM_order.yaml`  
-  外部 LLM 利用時の優先順序設定。
-- `docs/*.md`  
-  v4 の思想、relation 仕様、辞書仕様、境界、実装順序、ログ、報酬設計を定義する文書群。
+## 入口はこの 2 本を使う
 
-## 目指すシステム像
+### 1. アプリ実行
 
-v4 の最小パイプラインは次の通りです。
-
-```text
-Input
-  ↓
-Input Analysis
-  ↓
-Plan
-  ↓
-Divergence
-  ↓
-Convergence
-  ↓
-Slot
-  ↓
-Surface
-  ↓
-Response
+```bash
+python main.py --help
+python main.py --mode chat --lexicon libs/dict.lsdx
+python main.py --mode chat --lexicon libs/dict.lsdx --text "猫は動物？"
+python main.py --mode loop-learning --lexicon libs/dict.lsdx --auto-input --max-episodes 32
 ```
 
-この流れのうち、いまのリポジトリで最も強いのは **辞書基盤** です。  
-今後はこれを軸に、Plan / Divergence / Convergence / Slot / Surface を順に足していきます。
+`main.py` は、`chat` と `loop-learning` の共通入口です。
 
-ただし、その中心にあるのは単なる語彙数ではありません。  
-v4 が最優先するのは **relation の質** です。  
-語が多くても relation が弱ければ辞書は倉庫に留まり、relation が整えば辞書は思考エンジンになります。
+### 2. 辞書メンテナンス
+
+```bash
+python tools/lexicon_cli.py --help
+python tools/lexicon_cli.py convert-to-binary input.json --verify
+python tools/lexicon_cli.py convert-from-binary libs/dict.lsdx --style lexical
+python tools/lexicon_cli.py profile-load libs/dict.lsdx --sample-size 256
+```
+
+`tools/lexicon_cli.py` は、辞書変換・逆変換・プロファイルの共通入口です。
 
 ## リポジトリ構成
 
@@ -71,6 +59,7 @@ v4 が最優先するのは **relation の質** です。
 .
 ├─ README.md
 ├─ architecture.md
+├─ main.py
 ├─ docs/
 │  ├─ docs_guide.md
 │  ├─ philosophy.md
@@ -79,101 +68,83 @@ v4 が最優先するのは **relation の質** です。
 │  ├─ knowledge_boundaries.md
 │  ├─ implementation_plan.md
 │  ├─ logging.md
-│  └─ reward_design.md
+│  ├─ reward_design.md
+│  └─ script_inventory.md
+├─ libs/
+│  └─ dict.lsdx
 ├─ settings/
-│  └─ LLM_order.yaml
+│  ├─ LLM_order.yaml
+│  ├─ scoring_v1.yaml
+│  └─ teacher_profiles.yaml
 ├─ src/
 │  ├─ apps/
-│  │  └─ chat_v1.py
-│  └─ core/
-│     ├─ convergence/
-│     ├─ divergence/
-│     ├─ io/
-│     ├─ logging/
-│     ├─ planning/
-│     ├─ relation/
-│     ├─ slotting/
-│     └─ surface/
-└─ tools/
-   └─ convert_dict_to_binary.py
+│  │  ├─ chat_v1.py
+│  │  ├─ cli_common.py
+│  │  └─ loop_learning_v1.py
+│  ├─ core/
+│  └─ llm/
+├─ tools/
+│  ├─ lexicon_cli.py
+│  ├─ bootstrap_japanese_lexicon.py
+│  ├─ augment_conversation_lexicon.py
+│  ├─ convert_dict_to_binary.py
+│  ├─ convert_binary_to_dict.py
+│  └─ profile_lexicon_load.py
+└─ runtime/
+   └─ README.md
 ```
+
+## trace / episode / runtime の分離
+
+### trace
+
+`runtime/traces/latest.jsonl`
+
+- 1 入力 = 1 trace
+- 入力特徴、plan、relation 探索、slot、surface、score、timing を残す
+- `standard` は比較用、`deep_trace` は調査用
+
+### episode
+
+`runtime/episodes/latest.jsonl`
+
+- loop-learning 専用
+- trace の複製ではなく、学習判断の圧縮レコード
+- decision / reward / learning summary / unknown enrichment を残す
+
+### learning summary
+
+`runtime/learning_runs/latest.json`
+
+- 1 回の loop-learning 実行全体の要約
+
+### runtime ディレクトリ
+
+`runtime/` は **生成物置き場** です。過去ログや cache はリポジトリ本体へ含めず、空ディレクトリと説明ファイルだけ残します。
+
+## 設計原則
+
+- 辞書を知識ネットワークとして扱う
+- relation を辞書中核の接続規則として扱う
+- 発散と収束を relation 操作として扱う
+- 意味決定と表層化を分離する
+- 実行時状態と永続知識を混ぜない
+- ログを後付けではなく中核機能として扱う
+- 外部 LLM は補助輪に留める
+- 低遅延・低資源・再現性を守る
 
 ## まず読む順番
 
-1. `docs/docs_guide.md`  
-   文書全体の役割と読む順番を把握する。
-2. `docs/philosophy.md`  
-   v4 が何を作るのか、何を作らないのかを確認する。
-3. `docs/relation_design.md`  
-   relation をなぜ中核に置くのか、発散と収束をどう relation 操作として定義するのかを確認する。
-4. `docs/dictionary_schema.md`  
-   辞書をどう設計するかを確認する。
-5. `architecture.md`  
-   リポジトリ構成と処理責務の全体像を確認する。
-6. `docs/knowledge_boundaries.md`  
-   辞書・実行時・保存・設定の境界を確認する。
-7. `docs/implementation_plan.md`  
-   実装の優先順序を確認する。
-8. `docs/logging.md` / `docs/reward_design.md`  
-   観測・評価・学習の規約を確認する。
-
-## すぐに使えるもの
-
-### 最小縦スライス chat v1
-
-relation 基盤 → trace → Plan → Divergence / Convergence → Slot / Surface を最小構成で通す CLI を追加しています。
-
-```bash
-python -m src.apps.chat_v1 --lexicon runtime/dictionaries/bootstrapped_v1.json --text "猫は動物？"
-```
-
-または `main.py` から次のように呼べます。
-
-```bash
-python -m main --mode chat --lexicon runtime/dictionaries/bootstrapped_v1.json --text "猫は動物？"
-```
-
-対話モードで起動する場合は `--text` を省略します。
-実行すると `runtime/logs/latest.log` と `runtime/traces/latest.jsonl` に記録されます。
-
-### 辞書変換
-
-```bash
-python -m tools.convert_dict_to_binary input.json --verify
-```
-
-または
-
-```bash
-python tools/convert_dict_to_binary.py input.json --verify
-```
-
-出力形式は `.json` / `.lsd` / `.lsdx` を扱えます。
-
-## v4 の設計原則
-
-- 辞書を単語表ではなく知識ネットワークとして扱う
-- relation を辞書中核の接続規則として扱う
-- 発散を relation の順方向探索として扱う
-- 収束を relation の逆方向または制約方向探索として扱う
-- 意味決定と表層化を分離する
-- 中間状態を必ず観測可能にする
-- 実行時状態と永続知識を混ぜない
-- 設定値をコードに埋め込まない
-- 外部 LLM は補助輪であって中核ではない
-- 低遅延・低資源・再現性を同時に意識する
-
-## 非目標
-
-- 巨大 LLM と同じ方式で性能競争すること
-- ブラックボックスな次トークン予測をそのまま縮小再現すること
-- 表面的な自然さだけを先に最適化すること
-- 何でも辞書に入れて辞書と実行時を混同すること
-- relation を曖昧な関連語タグとして放置すること
+1. `docs/docs_guide.md`
+2. `docs/philosophy.md`
+3. `docs/relation_design.md`
+4. `docs/dictionary_schema.md`
+5. `architecture.md`
+6. `docs/knowledge_boundaries.md`
+7. `docs/logging.md`
+8. `docs/reward_design.md`
+9. `docs/script_inventory.md`
 
 ## 補足
 
-現行コードの辞書コンテナは **lexical entry 中心の実装互換フォーマット** です。  
-ただし v4 の思想上の中心は concept と relation にあります。  
-このギャップは `docs/dictionary_schema.md` と `docs/relation_design.md` で、
-**現行互換形式から relation 中心設計へどう移るか** まで含めて整理しています。
+既存の個別ツールスクリプトは互換のため残していますが、日常運用の入口は **`main.py` と `tools/lexicon_cli.py`** に寄せる方針です。

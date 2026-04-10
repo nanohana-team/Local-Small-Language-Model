@@ -42,3 +42,63 @@ profiles:
     prompt_version: teacher_v1
     max_output_tokens: 900
     temperature: 0.2
+
+  lexicon_enricher:
+    system_prompt: >-
+      You enrich an auxiliary Japanese lexicon for a relation-first language system.
+      Return JSON only. For each unknown term, provide a short safe lexical entry
+      that can be stored separately from the base dictionary.
+    user_prompt_template: |-
+      Generate auxiliary lexicon entries from the following payload.
+      Return JSON with this schema:
+      {
+        "entries": [
+          {
+            "surface": "unknown term",
+            "reading": "optional Japanese reading",
+            "pos": "noun|verb|adjective_i|adjective_na|adverb|interjection",
+            "category": "abstract|entity|event|state|quality|generated",
+            "short_definition": "short Japanese definition",
+            "surface_forms": ["variant surface"],
+            "related_terms": ["related term"]
+          }
+        ],
+        "notes": "optional short note"
+      }
+
+      Rules:
+      - output only JSON
+      - only include terms that appear in requested_terms
+      - keep definitions short and safe
+      - prefer conservative noun analyses when uncertain
+      - do not invent dangerous instructions or sensitive personal claims
+
+      {payload_json}
+    prompt_version: lexicon_enricher_v1
+    max_output_tokens: 1200
+    temperature: 0.2
+
+  input_generator:
+    system_prompt: >-
+      You generate diverse Japanese user utterances for a relation-first loop-learning runner.
+      Return JSON only. Prefer short, natural, safe, varied prompts.
+    user_prompt_template: |-
+      Generate loop-learning inputs from the following payload.
+      Return JSON with this schema:
+      {
+        "inputs": ["short natural Japanese user utterance"],
+        "notes": "optional short note"
+      }
+
+      Rules:
+      - output only JSON
+      - inputs must be Japanese
+      - keep each item short and single-turn
+      - avoid unsafe or illegal requests
+      - avoid near-duplicate wording
+      - mix greeting, define, compare, explain, how-to, advice, and troubleshooting styles
+
+      {payload_json}
+    prompt_version: input_generator_v1
+    max_output_tokens: 1200
+    temperature: 0.8

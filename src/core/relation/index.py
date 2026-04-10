@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, List, Mapping
 
 from .schema import canonicalize_relation
 
 
 @dataclass
 class RelationIndex:
-    """Indexes for concept relations and light lexical lookup."""
+    """Indexes for concept relations and light lexical lookup.
+
+    This class is intentionally tolerant of older startup-cache pickles that may
+    not contain newly added attributes such as ``by_target``. Mixed patch states
+    can happen when only part of the hotfix set has been applied.
+    """
 
     concepts: Dict[str, Dict[str, Any]]
     lexical_entries: Dict[str, Dict[str, Any]]
     slot_frames: Dict[str, Dict[str, Any]]
     by_source: Dict[str, List[Dict[str, Any]]]
+    by_target: Dict[str, List[Dict[str, Any]]]
     by_type: Dict[str, List[Dict[str, Any]]]
     target_to_sources: Dict[str, List[str]]
     label_to_concepts: Dict[str, List[str]]
@@ -21,28 +27,63 @@ class RelationIndex:
     surface_first_char: Dict[str, List[str]]
     concept_to_entries: Dict[str, List[str]]
 
+    def _ensure_by_target(self) -> Dict[str, List[Dict[str, Any]]]:
+        existing = getattr(self, "by_target", None)
+        if isinstance(existing, dict):
+            return existing
+
+        rebuilt: Dict[str, List[Dict[str, Any]]] = {}
+        by_source = getattr(self, "by_source", {})
+        if isinstance(by_source, Mapping):
+            for source_concept, relations in by_source.items():
+                if not isinstance(relations, list):
+                    continue
+                for relation in relations:
+                    if not isinstance(relation, Mapping):
+                        continue
+                    target = str(relation.get("target") or "")
+                    if not target:
+                        continue
+                    relation_with_source = dict(relation)
+                    relation_with_source.setdefault("source_concept", str(source_concept))
+                    rebuilt.setdefault(target, []).append(relation_with_source)
+        try:
+            self.by_target = rebuilt
+        except Exception:
+            pass
+        return rebuilt
+
     def get_outbound(self, concept_id: str) -> List[Dict[str, Any]]:
-        return list(self.by_source.get(str(concept_id), []))
+        return list(getattr(self, "by_source", {}).get(str(concept_id), []))
+
+    def get_inbound(self, concept_id: str) -> List[Dict[str, Any]]:
+        return list(self._ensure_by_target().get(str(concept_id), []))
 
     def get_inbound_sources(self, concept_id: str) -> List[str]:
-        return list(self.target_to_sources.get(str(concept_id), []))
+        return list(getattr(self, "target_to_sources", {}).get(str(concept_id), []))
 
     def get_by_type(self, relation_type: str) -> List[Dict[str, Any]]:
-        return list(self.by_type.get(str(relation_type), []))
+        return list(getattr(self, "by_type", {}).get(str(relation_type), []))
 
     def get_concept(self, concept_id: str) -> Dict[str, Any] | None:
-        return self.concepts.get(str(concept_id))
+        return getattr(self, "concepts", {}).get(str(concept_id))
+
+    def get_slot_frame(self, slot_frame_id: str | None) -> Dict[str, Any] | None:
+        if not slot_frame_id:
+            return None
+        return getattr(self, "slot_frames", {}).get(str(slot_frame_id))
 
     def concept_label(self, concept_id: str) -> str:
-        entries = self.concept_to_entries.get(str(concept_id), [])
+        entries = getattr(self, "concept_to_entries", {}).get(str(concept_id), [])
         if entries:
             ranked = sorted(
                 entries,
                 key=lambda value: (value.startswith("synthetic:"), len(value) < 2, len(value), value),
             )
             preferred = ranked[0]
-            if preferred in self.lexical_entries:
-                entry = self.lexical_entries[preferred]
+            lexical_entries = getattr(self, "lexical_entries", {})
+            if preferred in lexical_entries:
+                entry = lexical_entries[preferred]
                 lemma = str(entry.get("word") or entry.get("lemma") or preferred)
                 if lemma:
                     return lemma
@@ -53,14 +94,12 @@ class RelationIndex:
         return str(concept.get("label") or concept_id)
 
 
-
 def _append_unique(mapping: Dict[str, List[str]], key: str | None, value: str) -> None:
     if not key:
         return
     bucket = mapping.setdefault(str(key), [])
     if value not in bucket:
         bucket.append(value)
-
 
 
 def _collect_surface_to_entries(
@@ -88,7 +127,6 @@ def _collect_surface_to_entries(
     return generated
 
 
-
 def _build_surface_first_char(surface_to_entries: Mapping[str, List[str]]) -> Dict[str, List[str]]:
     first_char_map: Dict[str, List[str]] = {}
     for surface in surface_to_entries.keys():
@@ -98,7 +136,6 @@ def _build_surface_first_char(surface_to_entries: Mapping[str, List[str]]) -> Di
     for bucket in first_char_map.values():
         bucket.sort(key=len, reverse=True)
     return first_char_map
-
 
 
 def build_relation_index(container: Mapping[str, Any]) -> RelationIndex:
@@ -134,6 +171,7 @@ def build_relation_index(container: Mapping[str, Any]) -> RelationIndex:
     }
 
     by_source: Dict[str, List[Dict[str, Any]]] = {}
+    by_target: Dict[str, List[Dict[str, Any]]] = {}
     by_type: Dict[str, List[Dict[str, Any]]] = {}
     target_to_sources: Dict[str, List[str]] = {}
     label_to_concepts: Dict[str, List[str]] = {}
@@ -151,6 +189,7 @@ def build_relation_index(container: Mapping[str, Any]) -> RelationIndex:
             relation_with_source = dict(relation)
             relation_with_source["source_concept"] = concept_id
             by_source.setdefault(concept_id, []).append(relation_with_source)
+            by_target.setdefault(str(relation["target"]), []).append(relation_with_source)
             by_type.setdefault(str(relation["type"]), []).append(relation_with_source)
             _append_unique(target_to_sources, str(relation["target"]), concept_id)
 
@@ -168,6 +207,7 @@ def build_relation_index(container: Mapping[str, Any]) -> RelationIndex:
         lexical_entries=lexical_entries,
         slot_frames=slot_frames,
         by_source=by_source,
+        by_target=by_target,
         by_type=by_type,
         target_to_sources=target_to_sources,
         label_to_concepts=label_to_concepts,

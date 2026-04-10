@@ -30,6 +30,24 @@ EMPATHY_HINTS = (
 COMPARE_HINTS = ("比較", "違い", "どっち", "どちら", "比べ")
 PROCEDURE_HINTS = ("手順", "やり方", "方法", "設定", "実装")
 REASON_HINTS = ("なぜ", "どうして", "理由", "なんで")
+GREETING_HINTS = (
+    "おはよう",
+    "こんにちは",
+    "こんばんは",
+    "やあ",
+    "もしもし",
+    "よろしく",
+)
+THANKS_HINTS = ("ありがとう", "ありがとうございます", "助かった", "感謝")
+CHECKIN_HINTS = (
+    "元気?",
+    "元気？",
+    "元気か",
+    "元気かい",
+    "元気ですか",
+    "調子どう",
+    "調子はどう",
+)
 DEFINITION_PATTERNS = (
     re.compile(r'^\s*[「『"\']?(?P<term>.+?)[」』"\']?\s*(?:って|とは)\s*(?:何|なに|なん(?:ですか)?|どういう意味)\s*[？?]?$'),
     re.compile(r'^\s*[「『"\'](?P<term>.+?)[」』"\']\s*(?:って|とは)?\s*(?:何|なに|なん(?:ですか)?|どういう意味)?\s*[？?]?$'),
@@ -55,10 +73,8 @@ class PlanV1:
         return asdict(self)
 
 
-
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle in text for needle in needles)
-
 
 
 def _clean_focus_term(term: str) -> str:
@@ -66,7 +82,6 @@ def _clean_focus_term(term: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned)
     cleaned = re.sub(r"(?:って|とは)$", "", cleaned).strip(QUOTE_TRIM)
     return cleaned
-
 
 
 def extract_unknown_focus_term(text: str) -> str | None:
@@ -90,7 +105,6 @@ def extract_unknown_focus_term(text: str) -> str | None:
     return None
 
 
-
 def build_plan_v1(
     text: str,
     *,
@@ -112,7 +126,19 @@ def build_plan_v1(
     fallback_reason: str | None = None
     needs_clarification = False
 
-    if _contains_any(normalized, EMPATHY_HINTS):
+    if _contains_any(normalized, THANKS_HINTS):
+        intent = "thanks_reply"
+        response_mode = "social"
+        required_slots = []
+        relation_type_priority = ["style_variant", "related_to", "paraphrase"]
+        tone = "gentle"
+    elif _contains_any(normalized, GREETING_HINTS) or _contains_any(normalized, CHECKIN_HINTS):
+        intent = "greeting"
+        response_mode = "social"
+        required_slots = []
+        relation_type_priority = ["style_variant", "related_to", "paraphrase"]
+        tone = "gentle"
+    elif _contains_any(normalized, EMPATHY_HINTS):
         intent = "empathy"
         response_mode = "supportive"
         relation_type_priority = ["related_to", "style_variant", "paraphrase"]
@@ -148,7 +174,7 @@ def build_plan_v1(
         required_slots = ["topic", "support"]
         relation_type_priority = ["related_to", "hypernym", "collocation", "paraphrase"]
 
-    if topic_count == 0:
+    if topic_count == 0 and intent not in {"greeting", "thanks_reply"}:
         needs_clarification = True
         required_slots = ["topic"]
         relation_type_priority = ["related_to", "paraphrase"]

@@ -9,43 +9,28 @@ from pathlib import Path
 from typing import Any, Dict
 
 from src.core.convergence import run_convergence_v1
-from src.core.divergence import run_divergence_v1
+from src.core.divergence import analyze_input_v1, run_divergence_v1
+from src.core.evaluation import apply_external_feedback, build_external_signal, summarize_external_result
 from src.core.io.lsd_lexicon import (
     inspect_lexicon_storage,
     load_indexed_lsd_lexicon_container,
     load_lexicon_container,
     profile_lexicon_load,
 )
-from src.core.evaluation import (
-    apply_external_feedback,
-    build_external_signal,
-    summarize_external_result,
-    summarize_teacher_result,
-)
-from src.core.logging import (
-    TraceLogger,
-    build_teacher_output_record,
-    build_teacher_request_record,
-    build_teacher_selection_record,
-)
-from src.core.records import EpisodeWriter, ImprovementCandidateWriter, build_teacher_improvement_candidate
-from src.core.scoring import score_turn_v1
+from src.core.logging import TraceLogger
 from src.core.planning import build_plan_v1
 from src.core.relation import RelationIndex, build_relation_index, validate_relation_graph
+from src.core.scoring import score_turn_v1
 from src.core.slotting import fill_slots_v1
 from src.core.surface import render_surface_v1
-from src.llm import ExternalTeacherOrchestrator, TeacherTurnRequest
+from src.llm import ExternalTeacherOrchestrator
+from src.apps.cli_common import add_engine_runtime_args, resolve_trace_mode
 
 STARTUP_CACHE_VERSION = 2
 
 
 class MinimalChatEngine:
-    """LSLM v4 minimal vertical slice.
-
-    The engine intentionally stays small: it validates the relation graph,
-    extracts seed concepts, performs relation-based divergence/convergence,
-    fills a minimal slot structure, and renders 1–2 sentences.
-    """
+    """LSLM v4 minimal vertical slice."""
 
     def __init__(
         self,
@@ -61,19 +46,25 @@ class MinimalChatEngine:
         rebuild_startup_cache: bool = False,
         enable_external_eval: bool = False,
         enable_external_teacher: bool = False,
+        write_episodes: bool = True,
+        scoring_config_path: str | None = None,
         llm_order_path: str | Path = "settings/LLM_order.yaml",
         teacher_profile_path: str | Path = "settings/teacher_profiles.yaml",
-        scoring_config_path: str | Path = "settings/scoring_v1.yaml",
+        debug_enabled: bool = False,
     ) -> None:
         self.lexicon_path = Path(lexicon_path)
         self.runtime_dir = Path(runtime_dir)
-        self.logger = TraceLogger(self.runtime_dir, mode=trace_mode)
+        self.logger = TraceLogger(
+            self.runtime_dir,
+            mode=trace_mode,
+            scoring_config_path=scoring_config_path,
+            debug_enabled=debug_enabled,
+        )
         self.startup_info: Dict[str, Any] = {}
         self.enable_external_eval = enable_external_eval
         self.enable_external_teacher = enable_external_teacher
-        self.scoring_config_path = str(scoring_config_path)
-        self.episode_writer = EpisodeWriter(self.runtime_dir) if (enable_external_eval or enable_external_teacher) else None
-        self.improvement_writer = ImprovementCandidateWriter(self.runtime_dir) if enable_external_teacher else None
+        self.write_episodes = write_episodes
+        self.scoring_config_path = scoring_config_path
         self.external_orchestrator = None
         if enable_external_eval or enable_external_teacher:
             self.external_orchestrator = ExternalTeacherOrchestrator(
@@ -159,6 +150,15 @@ class MinimalChatEngine:
             raise ValueError(f"Relation validation failed:\n{preview}")
 
         self.startup_info["total_startup_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        self.logger.update_session_manifest(
+            startup=self.startup_info,
+            lexicon={
+                "path": str(self.lexicon_path),
+                "concept_count": len(self.index.concepts),
+                "lexical_entry_count": len(self.index.lexical_entries),
+                "slot_frame_count": len(self.index.slot_frames),
+            },
+        )
         self.logger.info(
             "minimal_chat_engine_ready "
             f"startup_path={self.startup_info.get('startup_path')} "
@@ -230,35 +230,67 @@ class MinimalChatEngine:
             pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
         tmp_path.replace(path)
 
-    def run_turn(self, text: str) -> Dict[str, Any]:
+    def run_turn(self, text: str, *, run_context: Dict[str, Any] | None = None, record_trace: bool = True) -> Dict[str, Any]:
         turn_id = self.logger.next_turn_id()
         started = time.perf_counter()
+        run_context = dict(run_context or {})
+        self.logger.debug(f"turn_started turn_id={turn_id} input={text!r}")
+
+        input_started = time.perf_counter()
+        input_analysis = analyze_input_v1(text, self.index)
+        input_analysis_ms = (time.perf_counter() - input_started) * 1000.0
+
+        plan_started = time.perf_counter()
+        plan = build_plan_v1(
+            text,
+            topic_count=len(input_analysis.input_features.get("seed_concepts", [])),
+            unknown_words=len(input_analysis.input_features.get("unknown_words", [])),
+            unknown_focus=input_analysis.unknown_focus,
+        )
+        plan_ms = (time.perf_counter() - plan_started) * 1000.0
+        self.logger.debug(
+            "plan_built "
+            f"turn_id={turn_id} intent={plan.intent} mode={plan.response_mode} "
+            f"seeds={len(input_analysis.input_features.get('seed_concepts', []))} "
+            f"unknown_words={len(input_analysis.input_features.get('unknown_words', []))}"
+        )
 
         divergence_started = time.perf_counter()
-        provisional_divergence = run_divergence_v1(text, build_plan_v1(text, topic_count=0), self.index)
-        initial_topic_count = len(provisional_divergence.input_features.get("seed_concepts", []))
-        unknown_word_count = len(provisional_divergence.input_features.get("unknown_words", []))
-        plan_started = time.perf_counter()
-        plan = build_plan_v1(text, topic_count=initial_topic_count, unknown_words=unknown_word_count)
-        plan_ms = (time.perf_counter() - plan_started) * 1000.0
-
-        divergence = run_divergence_v1(text, plan, self.index)
+        divergence = run_divergence_v1(text, plan, self.index, input_analysis=input_analysis)
         divergence_ms = (time.perf_counter() - divergence_started) * 1000.0
+        self.logger.debug(
+            "divergence_completed "
+            f"turn_id={turn_id} candidates={len(divergence.candidate_concepts)} "
+            f"seed_matches={len(divergence.seed_matches)} explored_relations={len(divergence.explored_relations)}"
+        )
 
         convergence_started = time.perf_counter()
         convergence = run_convergence_v1(divergence, plan, self.index)
         convergence_ms = (time.perf_counter() - convergence_started) * 1000.0
+        self.logger.debug(
+            "convergence_completed "
+            f"turn_id={turn_id} accepted_concepts={len(convergence.accepted_concepts)} "
+            f"rejected_concepts={len(convergence.rejected_concepts)} accepted_relations={len(convergence.accepted_relations)} "
+            f"rejected_relations={len(convergence.rejected_relations)}"
+        )
 
         slot_started = time.perf_counter()
         slots = fill_slots_v1(plan, divergence, convergence, self.index)
         slot_ms = (time.perf_counter() - slot_started) * 1000.0
+        self.logger.debug(
+            "slot_completed "
+            f"turn_id={turn_id} filled={len(slots.filled_slots)} missing={len(slots.missing_slots)}"
+        )
 
         surface_started = time.perf_counter()
         surface = render_surface_v1(plan, slots, accepted_relations=convergence.accepted_relations)
         surface_ms = (time.perf_counter() - surface_started) * 1000.0
+        self.logger.debug(
+            "surface_completed "
+            f"turn_id={turn_id} mode={surface['sentence_plan'].get('mode')} response={surface['final_text']!r}"
+        )
 
         total_ms = (time.perf_counter() - started) * 1000.0
-
         turn_score = score_turn_v1(
             plan=plan,
             divergence=divergence,
@@ -269,37 +301,39 @@ class MinimalChatEngine:
             validation_report=self.validation_report,
             scoring_config_path=self.scoring_config_path,
         )
-        scores = turn_score.scores
-        reward = turn_score.reward
-        feedback = turn_score.feedback
-        score_details = turn_score.details
 
+        reward = dict(turn_score.reward)
         evaluator_summary = None
         teacher_summary = None
         evaluator_ms = 0.0
-        external_signal = None
 
         trace = {
+            "schema_version": "trace_v1",
+            "record_type": "trace",
             "session_id": self.logger.session_id,
             "turn_id": turn_id,
             "input": text,
             "input_features": divergence.input_features,
             "plan": plan.to_dict(),
             "divergence_candidates": [candidate.to_dict() for candidate in divergence.candidate_concepts[:12]],
+            "seed_matches": [match.to_dict() for match in divergence.seed_matches[:12]],
             "explored_relations": divergence.explored_relations,
             "convergence_candidates": convergence.accepted_concepts,
+            "rejected_candidates": convergence.rejected_concepts,
             "accepted_relations": convergence.accepted_relations,
+            "rejected_relations": convergence.rejected_relations,
             "filled_slots": slots.filled_slots,
             "missing_slots": slots.missing_slots,
+            "slot_evidence": slots.slot_evidence,
             "surface_plan": surface["sentence_plan"],
             "response": surface["final_text"],
-            "scores": scores,
+            "scores": turn_score.scores,
             "reward": reward,
-            "feedback": feedback,
-            "score_details": score_details,
+            "feedback": turn_score.feedback,
+            "scoring_details": turn_score.details,
             "timing": {
                 "total_ms": round(total_ms, 3),
-                "input_analysis_ms": round(0.0, 3),
+                "input_analysis_ms": round(input_analysis_ms, 3),
                 "plan_ms": round(plan_ms, 3),
                 "divergence_ms": round(divergence_ms, 3),
                 "convergence_ms": round(convergence_ms, 3),
@@ -307,11 +341,8 @@ class MinimalChatEngine:
                 "surface_ms": round(surface_ms, 3),
                 "evaluator_ms": 0.0,
             },
-            "startup": self.startup_info,
-            "teacher_requests": [],
-            "teacher_outputs": [],
-            "teacher_selection": None,
-            "teacher_improvement_candidates": [],
+            "run_context": run_context or None,
+            "trace_mode": self.logger.mode,
         }
 
         if self.external_orchestrator is not None and (self.enable_external_eval or self.enable_external_teacher):
@@ -323,8 +354,6 @@ class MinimalChatEngine:
                 "response": trace["response"],
                 "scores": trace["scores"],
                 "reward": trace["reward"],
-                "feedback": trace["feedback"],
-                "score_details": trace["score_details"],
             }
             if self.enable_external_eval:
                 external_started = time.perf_counter()
@@ -335,133 +364,47 @@ class MinimalChatEngine:
                 trace["timing"]["evaluator_ms"] = round(evaluator_ms, 3)
 
             if self.enable_external_teacher:
-                teacher_request = TeacherTurnRequest.from_turn_payload(external_payload)
-                teacher_payload = teacher_request.to_payload()
-                teacher_result = self.external_orchestrator.teach_turn(teacher_payload)
-                teacher_summary = summarize_teacher_result(teacher_result)
+                teacher_result = self.external_orchestrator.teach_turn(external_payload)
+                teacher_summary = summarize_external_result(teacher_result)
                 trace["external_teacher"] = teacher_summary
-                trace["teacher_requests"] = [
-                    build_teacher_request_record(teacher_payload, mode="teacher")
-                ]
-                trace["teacher_outputs"] = [
-                    build_teacher_output_record(teacher_summary)
-                ]
-                trace["teacher_selection"] = build_teacher_selection_record(teacher_summary)
 
-            external_signal = build_external_signal(
-                evaluator_summary,
-                teacher_summary,
-                scoring_config_path=self.scoring_config_path,
-            )
-            reward = apply_external_feedback(
-                reward,
-                evaluator_summary=evaluator_summary,
-                teacher_summary=teacher_summary,
-                scoring_config_path=self.scoring_config_path,
-            )
-            trace["reward"] = reward
-            trace["external_signal"] = external_signal
-
-            improvement_candidate = build_teacher_improvement_candidate(
-                session_id=self.logger.session_id,
-                turn_id=turn_id,
-                user_input=trace["input"],
-                response=trace["response"],
-                plan=trace["plan"],
-                teacher_summary=teacher_summary,
-                external_signal=external_signal,
-            )
-            if improvement_candidate is not None:
-                trace["teacher_improvement_candidates"] = [improvement_candidate]
-                if self.improvement_writer is not None:
-                    self.improvement_writer.write(improvement_candidate)
-
-            if self.episode_writer is not None:
-                self.episode_writer.write(
-                    {
-                        "session_id": self.logger.session_id,
-                        "turn_id": turn_id,
-                        "input": trace["input"],
-                        "plan": trace["plan"],
-                        "accepted_relations": trace["accepted_relations"],
-                        "filled_slots": trace["filled_slots"],
-                        "response": trace["response"],
-                        "scores": trace["scores"],
-                        "reward": trace["reward"],
-                        "feedback": trace["feedback"],
-                        "score_details": trace["score_details"],
-                        "external_signal": trace.get("external_signal"),
-                        "external_evaluator": evaluator_summary,
-                        "external_teacher": teacher_summary,
-                        "teacher_requests": trace.get("teacher_requests", []),
-                        "teacher_outputs": trace.get("teacher_outputs", []),
-                        "teacher_selection": trace.get("teacher_selection"),
-                        "teacher_improvement_candidates": trace.get("teacher_improvement_candidates", []),
-                    }
+            if evaluator_summary is not None or teacher_summary is not None:
+                reward = apply_external_feedback(
+                    reward,
+                    evaluator_summary,
+                    teacher_summary,
+                    scoring_config_path=self.scoring_config_path,
                 )
-        self.logger.debug(
-            f"turn_completed turn_id={turn_id} accepted_concepts={len(convergence.accepted_concepts)} total_ms={total_ms:.3f}"
-        )
-        self.logger.record_trace(trace)
-        return trace
+                trace["reward"] = reward
+                trace["external_signal"] = build_external_signal(
+                    evaluator_summary,
+                    teacher_summary,
+                    scoring_config_path=self.scoring_config_path,
+                )
 
+        self.logger.debug(
+            f"turn_completed turn_id={turn_id} accepted_concepts={len(convergence.accepted_concepts)} total_ms={total_ms:.3f} decision={trace['scoring_details'].get('decision')}"
+        )
+        if record_trace:
+            self.logger.record_trace(trace)
+        return trace
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the LSLM v4 minimal relation-first chat pipeline.")
-    parser.add_argument(
-        "--lexicon",
-        default="runtime/dictionaries/bootstrapped_v1.json",
-        help="Path to the JSON/LSD/LSDX lexicon container.",
-    )
-    parser.add_argument("--text", help="Single-turn input text. If omitted, starts interactive mode.")
-    parser.add_argument("--runtime-dir", default="runtime", help="Runtime directory for logs and traces.")
-    parser.add_argument(
-        "--trace-mode",
-        default="standard",
-        choices=["minimal", "standard", "deep_trace"],
-        help="Trace verbosity mode.",
-    )
-    parser.add_argument("--allow-open-relations", action="store_true", help="Do not require a closed relation graph.")
-    parser.add_argument("--non-strict-schema", action="store_true", help="Relax top-level schema validation.")
-    parser.add_argument("--dump-trace", action="store_true", help="Print the full trace JSON instead of only the response.")
-    parser.add_argument(
-        "--startup-mode",
-        default="auto",
-        choices=["auto", "fast", "full"],
-        help="Startup path. 'auto' uses indexed lightweight load for .lsdx, 'fast' forces it when possible, 'full' always materializes the full container.",
-    )
-    parser.add_argument("--no-startup-cache", action="store_true", help="Disable the startup cache for indexed lexicons.")
-    parser.add_argument("--rebuild-startup-cache", action="store_true", help="Ignore and rebuild the startup cache.")
-    parser.add_argument("--profile-init", action="store_true", help="Print startup profile JSON and exit.")
-    parser.add_argument("--profile-lexicon-only", action="store_true", help="Profile lexicon loading only and exit.")
-    parser.add_argument("--profile-sample-size", type=int, default=128, help="Sample size for lexicon profile decoding.")
-    parser.add_argument("--profile-skip-materialize", action="store_true", help="Skip full materialization during lexicon-only profiling.")
-    parser.add_argument(
-        "--profile-lightweight-materialize",
-        action="store_true",
-        help="Use lightweight indexed materialization during profiling when possible.",
-    )
-    parser.add_argument("--external-eval", action="store_true", help="Run external evaluator after each turn.")
-    parser.add_argument("--external-teacher", action="store_true", help="Run external teacher after each turn.")
-    parser.add_argument("--llm-order", default="settings/LLM_order.yaml", help="Path to the external LLM order YAML.")
-    parser.add_argument(
-        "--teacher-profiles",
-        default="settings/teacher_profiles.yaml",
-        help="Path to the evaluator/teacher profile YAML.",
-    )
-    parser.add_argument(
-        "--scoring-config",
-        default="settings/scoring_v1.yaml",
-        help="Path to the scoring and external reward merge YAML.",
+    add_engine_runtime_args(
+        parser,
+        include_text=True,
+        include_dump_trace=True,
+        include_debug=True,
+        chat_help=True,
     )
     return parser
 
 
-
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.profile_lexicon_only:
         print(
@@ -478,10 +421,12 @@ def main() -> int:
         )
         return 0
 
+    trace_mode = resolve_trace_mode(args)
+
     engine = MinimalChatEngine(
         args.lexicon,
         runtime_dir=args.runtime_dir,
-        trace_mode=args.trace_mode,
+        trace_mode=trace_mode,
         strict_schema=not args.non_strict_schema,
         strict_relations=True,
         require_closed_relations=not args.allow_open_relations,
@@ -490,9 +435,11 @@ def main() -> int:
         rebuild_startup_cache=args.rebuild_startup_cache,
         enable_external_eval=args.external_eval,
         enable_external_teacher=args.external_teacher,
+        write_episodes=not args.no_episodes,
+        scoring_config_path=args.scoring_config,
         llm_order_path=args.llm_order,
         teacher_profile_path=args.teacher_profiles,
-        scoring_config_path=args.scoring_config,
+        debug_enabled=args.debug,
     )
 
     if args.profile_init:
@@ -507,7 +454,7 @@ def main() -> int:
             print(trace["response"])
         return 0
 
-    print("LSLM v4 minimal chat v1")
+    print("LSLM v4 minimal chat")
     print("exit / quit / Ctrl-D で終了")
     while True:
         try:

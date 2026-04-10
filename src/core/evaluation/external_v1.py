@@ -167,12 +167,28 @@ def apply_external_reward(
     reward: Mapping[str, Any],
     external_summary: Mapping[str, Any],
     *,
-    alpha: float = 0.8,
-    beta: float = 0.2,
+    alpha: float | None = None,
+    beta: float | None = None,
+    scoring_config_path: str | None = None,
 ) -> Dict[str, float | None]:
+    config = _load_external_reward_config(scoring_config_path)
+    if alpha is not None:
+        config["internal_weight"] = float(alpha)
+    if beta is not None:
+        config["external_weight"] = float(beta)
+
     internal = _coerce_optional_float(reward.get("internal")) or 0.0
     external_value = _coerce_optional_float((external_summary or {}).get("external_score"))
-    total = round(_clamp(internal), 6) if external_value is None else round(_clamp(alpha * internal + beta * external_value), 6)
+    if external_value is None:
+        total = round(_clamp(internal), 6)
+    else:
+        total = round(
+            _clamp(
+                max(0.0, float(config.get("internal_weight", 0.8))) * internal
+                + max(0.0, float(config.get("external_weight", 0.2))) * external_value
+            ),
+            6,
+        )
     return {
         "internal": round(_clamp(internal), 6),
         "external": None if external_value is None else round(_clamp(external_value), 6),

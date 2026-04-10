@@ -26,7 +26,8 @@ class ImprovementCandidateWriter:
 
     def write(self, payload: Mapping[str, Any]) -> None:
         serializable = dict(payload)
-        serializable.setdefault("timestamp_jst", datetime.now(JST).isoformat())
+        if not serializable.get("timestamp_jst"):
+            serializable["timestamp_jst"] = datetime.now(JST).isoformat()
         with self.latest_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(serializable, ensure_ascii=False) + "\n")
 
