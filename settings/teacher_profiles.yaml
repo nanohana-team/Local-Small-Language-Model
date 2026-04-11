@@ -15,7 +15,7 @@ profiles:
       }
 
       {payload_json}
-    prompt_version: evaluator_v1
+    prompt_version: evaluator_v2
     max_output_tokens: 600
     temperature: 0.1
 
@@ -39,7 +39,7 @@ profiles:
       }
 
       {payload_json}
-    prompt_version: teacher_v1
+    prompt_version: teacher_v2
     max_output_tokens: 900
     temperature: 0.2
 
@@ -74,9 +74,28 @@ profiles:
       - do not invent dangerous instructions or sensitive personal claims
 
       {payload_json}
-    prompt_version: lexicon_enricher_v1
+    prompt_version: lexicon_enricher_v2
     max_output_tokens: 1200
     temperature: 0.2
+    payload_defaults:
+      task: Generate auxiliary lexical entries for unknown loop-learning terms.
+      language: ja
+      known_constraints:
+        separate_overlay_lexicon: true
+        keep_definitions_short: true
+        safe_only: true
+        prefer_conservative_pos: true
+      output_schema:
+        entries:
+          - surface: unknown term
+            reading: optional reading
+            pos: noun|verb|adjective_i|adjective_na|adverb|interjection
+            category: abstract|entity|event|state|quality|generated
+            short_definition: short Japanese definition
+            surface_forms:
+              - variant surface
+            related_terms:
+              - related term
 
   input_generator:
     system_prompt: >-
@@ -99,6 +118,62 @@ profiles:
       - mix greeting, define, compare, explain, how-to, advice, and troubleshooting styles
 
       {payload_json}
-    prompt_version: input_generator_v1
+    prompt_version: input_generator_v2
     max_output_tokens: 1200
     temperature: 0.8
+    payload_defaults:
+      task: Generate diverse Japanese user inputs for loop-learning.
+      language: ja
+      style:
+        short_natural: true
+        safe: true
+        varied_intents: true
+        single_turn_inputs: true
+      target_intents:
+        - greeting
+        - thanks
+        - define
+        - compare
+        - explain
+        - how_to
+        - advice
+        - troubleshooting
+      avoid:
+        - unsafe medical dosing
+        - self-harm assistance
+        - illegal activity
+        - sexual content
+        - identical near-duplicates
+        - very long multi-part instructions
+      output_schema:
+        inputs:
+          - short Japanese utterance
+    runtime_options:
+      default_topic_hints:
+        - あいさつ
+        - 雑談
+        - 定義質問
+        - 比較質問
+        - 理由説明
+        - 手順説明
+        - 生活の相談
+        - 学習の相談
+        - PCトラブル
+        - LSLM / relation / 辞書
+      example_bank:
+        - おはよう
+        - こんにちは
+        - ありがとう
+        - LSLM v4って何？
+        - 犬と猫の違いは？
+        - 空はなぜ青いの？
+        - 勉強に集中するコツは？
+        - 眠れないときはどうすればいい？
+        - パソコンが重いときの確認手順は？
+        - 雨の日に気分を上げる方法は？
+        - AIと辞書の違いを説明して
+        - relationって何？
+        - 比較するときに大事なことは？
+        - 日本語を自然にするには？
+        - 短く自己紹介して
+        - 猫は動物？

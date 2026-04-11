@@ -75,7 +75,7 @@ python tools/lexicon_cli.py profile-load libs/dict.lsdx --sample-size 256
 ├─ settings/
 │  ├─ LLM_order.yaml
 │  ├─ scoring_v1.yaml
-│  └─ teacher_profiles.yaml
+│  └─ teacher_profiles.yaml   # LLM prompt / payload defaults の置き場
 ├─ src/
 │  ├─ apps/
 │  │  ├─ chat_v1.py
@@ -94,6 +94,19 @@ python tools/lexicon_cli.py profile-load libs/dict.lsdx --sample-size 256
    └─ README.md
 ```
 
+## LLM プロンプトの置き場
+
+外部 evaluator / teacher / unknown word enrichment / auto-input generator に渡す **LLM 向けプロンプト文面** と、
+auto-input / lexicon enrichment で使う **payload defaults** は `settings/teacher_profiles.yaml` に集約します。
+
+コード側は、
+
+- どの profile を使うか
+- 実行時に何を差し込むか
+- どの provider / model を試すか
+
+だけを持ち、自然言語のプロンプト本文は settings 側で管理します。
+
 ## trace / episode / runtime の分離
 
 ### trace
@@ -111,6 +124,19 @@ python tools/lexicon_cli.py profile-load libs/dict.lsdx --sample-size 256
 - loop-learning 専用
 - trace の複製ではなく、学習判断の圧縮レコード
 - decision / reward / learning summary / unknown enrichment を残す
+
+### auto-input の LLM 痕跡
+
+`--mode loop-learning --auto-input --debug` のときは、`runtime/logs/debug.log` と `runtime/logs/latest.log` に少なくとも次が残ります。
+
+- `auto_input_llm_requested`
+- `llm_call_started`
+- `llm_model_try`
+- `llm_call_succeeded` または `llm_call_failed`
+- `auto_input_llm_result`
+- 必要なら `auto_input_fallback_selected`
+
+これにより、auto-input が本当に LLM を通ったのか、設定不備や API エラーで fallback したのかを人間可読ログで切り分けられます。
 
 ### learning summary
 

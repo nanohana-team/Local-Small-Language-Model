@@ -74,6 +74,39 @@ v4 ではログを次の 3 層に分けます。
 
 ---
 
+### 3.2.1 外部 LLM 呼び出しログ
+
+external evaluator / teacher / auto-input generator / unknown word enrichment を使う場合は、
+少なくとも次のイベントを人間可読ログへ残します。
+
+- `llm_call_started`
+- `llm_model_try`
+- `llm_call_succeeded`
+- `llm_model_failed`
+- `llm_call_failed`
+
+loop-learning の auto-input ではさらに次を残します。
+
+- `auto_input_llm_requested`
+- `auto_input_llm_result`
+- `auto_input_fallback_selected`
+
+これにより、LLM を使ったかどうか、どの provider / model を試したか、
+settings 側の prompt profile で fallback したのかを `debug.log` と `latest.log` から切り分けられます。
+
+## 3.2.2 prompt 所有権
+
+LLM に渡す自然言語の system prompt / user prompt template / payload defaults は、
+原則 `settings/teacher_profiles.yaml` に置きます。
+
+コード側は、
+
+- どの profile を選ぶか
+- 実行時の payload に何を差し込むか
+- provider 順序をどう試すか
+
+だけを持ち、自然言語の本文を複製しません。
+
 ## 3.3 構造化トレース
 
 1 入力 1 レコードの JSONL です。  

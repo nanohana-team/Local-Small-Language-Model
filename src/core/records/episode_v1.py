@@ -143,6 +143,11 @@ def build_episode_v1(
             {
                 "source": auto_input_meta.get("source"),
                 "used_llm": bool(auto_input_meta.get("used_llm", False)),
+                "provider": auto_input_meta.get("provider"),
+                "model": auto_input_meta.get("model"),
+                "prompt_version": auto_input_meta.get("prompt_version"),
+                "profile_mode": auto_input_meta.get("profile_mode"),
+                "error": auto_input_meta.get("error"),
                 "topic_hints": list(auto_input_meta.get("topic_hints", []))[:6],
             }
         )

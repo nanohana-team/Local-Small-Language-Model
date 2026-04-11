@@ -41,18 +41,7 @@ DEFAULT_AUTO_INPUTS: list[str] = [
     "猫は動物？",
 ]
 
-DEFAULT_AUTO_INPUT_TOPICS: list[str] = [
-    "あいさつ",
-    "雑談",
-    "定義質問",
-    "比較質問",
-    "理由説明",
-    "手順説明",
-    "生活の相談",
-    "学習の相談",
-    "PCトラブル",
-    "LSLM / relation / 辞書",
-]
+
 
 
 class LoopLearningError(RuntimeError):
@@ -139,6 +128,7 @@ class LoopLearningRunner:
             self.unknown_word_orchestrator = ExternalTeacherOrchestrator(
                 llm_order_path=args.llm_order,
                 teacher_profile_path=args.teacher_profiles,
+                logger=self.engine.logger,
             )
         self.unknown_word_stats: dict[str, Any] = {
             "enabled": not args.no_unknown_word_llm,
@@ -204,30 +194,9 @@ class LoopLearningRunner:
         )[:64]
 
         payload = {
-            "task": "Generate auxiliary lexical entries for unknown loop-learning terms.",
-            "language": "ja",
             "requested_terms": requested_terms,
             "user_input": str(trace.get("input") or ""),
             "plan": trace.get("plan") if isinstance(trace.get("plan"), Mapping) else {},
-            "known_constraints": {
-                "separate_overlay_lexicon": True,
-                "keep_definitions_short": True,
-                "safe_only": True,
-                "prefer_conservative_pos": True,
-            },
-            "output_schema": {
-                "entries": [
-                    {
-                        "surface": "unknown term",
-                        "reading": "optional reading",
-                        "pos": "noun|verb|adjective_i|adjective_na|adverb|interjection",
-                        "category": "abstract|entity|event|state|quality|generated",
-                        "short_definition": "short Japanese definition",
-                        "surface_forms": ["variant surface"],
-                        "related_terms": ["related term"],
-                    }
-                ]
-            },
         }
         result = self.unknown_word_orchestrator.run_profile("lexicon_enricher", payload)
         if result.error:
@@ -272,7 +241,7 @@ class LoopLearningRunner:
         }
 
     def run(self) -> dict[str, Any]:
-        prompts = _load_learning_inputs(self.args, auto_input_meta=self._auto_input_meta)
+        prompts = _load_learning_inputs(self.args, auto_input_meta=self._auto_input_meta, logger=self.engine.logger)
         if not prompts:
             raise LoopLearningError("loop-learning requires at least one input. Use --dataset, --text, or --auto-input.")
         max_episodes = max(1, int(self.args.max_episodes))
@@ -287,6 +256,16 @@ class LoopLearningRunner:
                 "external_teacher": bool(self.args.external_teacher),
             }
         )
+        if self.args.auto_input:
+            print(
+                "[LOOP] auto_input "
+                f"source={self._auto_input_meta.get('source')} "
+                f"used_llm={bool(self._auto_input_meta.get('used_llm', False))} "
+                f"provider={self._auto_input_meta.get('provider') or 'none'} "
+                f"model={self._auto_input_meta.get('model') or 'none'} "
+                f"generated={self._auto_input_meta.get('generated_count')} "
+                f"error={self._auto_input_meta.get('error') or 'none'}"
+            )
 
         decision_counter: Counter[str] = Counter()
         intent_counter: Counter[str] = Counter()
@@ -445,7 +424,12 @@ def _cycling_prompts(
 
 
 
-def _load_learning_inputs(args: argparse.Namespace, *, auto_input_meta: dict[str, Any] | None = None) -> list[str]:
+def _load_learning_inputs(
+    args: argparse.Namespace,
+    *,
+    auto_input_meta: dict[str, Any] | None = None,
+    logger: Any | None = None,
+) -> list[str]:
     inputs: list[str] = []
     for item in args.text or []:
         normalized = _normalize_prompt(item)
@@ -456,7 +440,7 @@ def _load_learning_inputs(args: argparse.Namespace, *, auto_input_meta: dict[str
         inputs.extend(_load_dataset_file(Path(args.dataset)))
 
     if not inputs and args.auto_input:
-        generated = _build_auto_inputs(args, auto_input_meta=auto_input_meta)
+        generated = _build_auto_inputs(args, auto_input_meta=auto_input_meta, logger=logger)
         inputs.extend(generated)
 
     if auto_input_meta is not None and not args.auto_input:
@@ -466,11 +450,15 @@ def _load_learning_inputs(args: argparse.Namespace, *, auto_input_meta: dict[str
 
 
 
-def _build_auto_inputs(args: argparse.Namespace, *, auto_input_meta: dict[str, Any] | None = None) -> list[str]:
+def _build_auto_inputs(
+    args: argparse.Namespace,
+    *,
+    auto_input_meta: dict[str, Any] | None = None,
+    logger: Any | None = None,
+) -> list[str]:
     requested_count = int(args.auto_input_count or args.max_episodes or len(DEFAULT_AUTO_INPUTS))
     requested_count = max(8, min(requested_count, 64))
     topic_hints = _dedupe_preserve_order([_normalize_prompt(item) for item in (args.auto_input_topic or []) if _normalize_prompt(item)])
-    base_examples = list(DEFAULT_AUTO_INPUTS[:12])
 
     if auto_input_meta is not None:
         auto_input_meta.update(
@@ -489,13 +477,20 @@ def _build_auto_inputs(args: argparse.Namespace, *, auto_input_meta: dict[str, A
             teacher_profile_path=args.teacher_profiles,
             seed=int(args.seed),
             topic_hints=topic_hints,
-            examples=base_examples,
+            logger=logger,
         )
         if auto_input_meta is not None:
             auto_input_meta.update(llm_meta)
         combined = _dedupe_preserve_order(generated + DEFAULT_AUTO_INPUTS)
         if generated:
             return combined
+        if logger is not None and hasattr(logger, "warning"):
+            logger.warning(
+                "auto_input_fallback_selected "
+                f"reason={llm_meta.get('error') or 'llm_returned_no_inputs'} requested={requested_count}"
+            )
+    elif logger is not None and hasattr(logger, "info"):
+        logger.info("auto_input_llm_disabled requested=%s" % requested_count)
 
     fallback = _dedupe_preserve_order(DEFAULT_AUTO_INPUTS)
     if auto_input_meta is not None:
@@ -518,44 +513,30 @@ def _generate_auto_inputs_with_llm(
     teacher_profile_path: str,
     seed: int,
     topic_hints: list[str],
-    examples: list[str],
+    logger: Any | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     orchestrator = ExternalTeacherOrchestrator(
         llm_order_path=llm_order_path,
         teacher_profile_path=teacher_profile_path,
+        logger=logger,
     )
+    profile = orchestrator.get_profile("input_generator")
+    runtime_options = profile.runtime_options if profile is not None else {}
+    default_topic_hints = _normalized_list(runtime_options.get("default_topic_hints"))
+    example_bank = _normalized_list(runtime_options.get("example_bank"))
+    resolved_topic_hints = topic_hints or default_topic_hints
+    resolved_examples = example_bank[:12] or list(DEFAULT_AUTO_INPUTS[:12])
+    if logger is not None and hasattr(logger, "info"):
+        logger.info(
+            "auto_input_llm_requested "
+            f"requested={requested_count} topics={len(resolved_topic_hints)} examples={len(resolved_examples)} "
+            f"profile=input_generator prompt_version={profile.prompt_version if profile is not None else 'missing'}"
+        )
     payload = {
-        "task": "Generate diverse Japanese user inputs for loop-learning.",
-        "language": "ja",
         "requested_count": requested_count,
         "seed": seed,
-        "style": {
-            "short_natural": True,
-            "safe": True,
-            "varied_intents": True,
-            "single_turn_inputs": True,
-        },
-        "target_intents": [
-            "greeting",
-            "thanks",
-            "define",
-            "compare",
-            "explain",
-            "how_to",
-            "advice",
-            "troubleshooting",
-        ],
-        "topic_hints": topic_hints or DEFAULT_AUTO_INPUT_TOPICS,
-        "avoid": [
-            "unsafe medical dosing",
-            "self-harm assistance",
-            "illegal activity",
-            "sexual content",
-            "identical near-duplicates",
-            "very long multi-part instructions",
-        ],
-        "examples": examples,
-        "output_schema": {"inputs": ["short Japanese utterance"]},
+        "topic_hints": resolved_topic_hints,
+        "examples": resolved_examples,
     }
     result = orchestrator.generate_inputs(payload)
     prompts = _extract_generated_inputs(result.parsed, requested_count=requested_count)
@@ -569,8 +550,17 @@ def _generate_auto_inputs_with_llm(
         "error": result.error,
         "latency_ms": result.latency_ms,
         "prompt_version": result.prompt_version,
-        "topic_hints": topic_hints,
+        "topic_hints": resolved_topic_hints,
+        "llm_attempted": True,
+        "profile_mode": "input_generator",
+        "profile_path": str(teacher_profile_path),
     }
+    if logger is not None and hasattr(logger, "info"):
+        logger.info(
+            "auto_input_llm_result "
+            f"source={meta['source']} generated={len(prompts)} provider={result.provider} model={result.model} "
+            f"prompt_version={result.prompt_version} error={result.error or 'none'}"
+        )
     return prompts, meta
 
 
@@ -588,6 +578,13 @@ def _extract_generated_inputs(parsed: Mapping[str, Any] | None, *, requested_cou
     outputs = [item for item in normalized if item]
     outputs = _dedupe_preserve_order(outputs)
     return outputs[:requested_count]
+
+
+def _normalized_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized = [_normalize_prompt(item) for item in value]
+    return [item for item in normalized if item]
 
 
 

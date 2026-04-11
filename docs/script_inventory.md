@@ -158,6 +158,22 @@
 
 ---
 
+## 3.5 settings に置くべきもの
+
+### `settings/teacher_profiles.yaml`
+
+役割:
+
+- external evaluator / teacher の prompt 管理
+- auto-input generator の prompt と payload defaults 管理
+- unknown word lexicon enricher の prompt と payload defaults 管理
+
+方針:
+
+- LLM に渡す自然言語本文はここへ集約する
+- コード側に英語プロンプト本文を散在させない
+- prompt_version はここで上げる
+
 ## 4. 不要寄りのもの
 
 ### 実行生成物

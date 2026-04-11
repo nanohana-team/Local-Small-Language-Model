@@ -70,6 +70,7 @@ class MinimalChatEngine:
             self.external_orchestrator = ExternalTeacherOrchestrator(
                 llm_order_path=llm_order_path,
                 teacher_profile_path=teacher_profile_path,
+                logger=self.logger,
             )
 
         started = time.perf_counter()
